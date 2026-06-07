@@ -1,0 +1,168 @@
+name: Release Builder
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+          - name: quickcull-linux
+            platform: linux/amd64
+            os: ubuntu-latest
+            asset_name: quickcull-linux-amd64
+            binary_name: quickcull
+          - name: quickcull-windows
+            platform: windows/amd64
+            os: windows-latest
+            asset_name: quickcull-windows-amd64
+            binary_name: quickcull.exe
+          - name: quickcull-macos
+            platform: darwin/universal
+            os: macos-latest
+            asset_name: quickcull-macos-universal
+            binary_name: quickcull
+
+    runs-on: ${{ matrix.build.os }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install Wails CLI
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Install Linux Dependencies
+        if: matrix.build.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libglib2.0-dev \
+            libgirepository1.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libdbus-1-dev \
+            libgcrypt20-dev \
+            libsystemd-dev
+          
+          # Fix for modern Ubuntu where webkit2gtk-4.0 is replaced by 4.1
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc
+          sudo ln -sf /usr/lib/x86_64-linux-gnu/pkgconfig/javascriptcoregtk-4.1.pc /usr/lib/x86_64-linux-gnu/pkgconfig/javascriptcoregtk-4.0.pc
+
+      - name: Build Frontend
+        run: |
+          cd ui
+          npm ci --force
+          npm run build
+          cd ..
+
+      - name: Build Wails App
+        run: |
+          export GOFLAGS="-tags=webkit2gtk_4_1"
+          
+          # Platform-specific CGO and Linker flags
+          if [ "${{ matrix.build.os }}" == "macos-latest" ]; then
+            export CGO_CFLAGS="-mmacosx-version-min=11.0"
+            export CGO_LDFLAGS="-mmacosx-version-min=11.0"
+            EXTRA_LDFLAGS=""
+          elif [ "${{ matrix.build.os }}" == "windows-latest" ]; then
+            # Force static linking of C/C++ stdlib on Windows to avoid missing DLLs
+            EXTRA_LDFLAGS="-extldflags '-static -static-libgcc -static-libstdc++'"
+          else
+            EXTRA_LDFLAGS=""
+          fi
+          
+          VERSION_CLEAN=${{ github.ref_name }}
+          VERSION_CLEAN=${VERSION_CLEAN#v} # Strip 'v' prefix if present
+          if [ -z "$VERSION_CLEAN" ]; then VERSION_CLEAN="1.0.0"; fi
+          
+          wails build -platform ${{ matrix.build.platform }} -o ${{ matrix.build.binary_name }} -tags webkit2gtk_4_1 -ldflags "-s -w -X main.version=${VERSION_CLEAN} ${EXTRA_LDFLAGS}"
+
+      - name: Ad-hoc Sign macOS App Bundle
+        if: matrix.build.os == 'macos-latest'
+        run: |
+          APP_PATH="$(find build/bin -maxdepth 1 -type d -name '*.app' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app bundle found in build/bin"
+            exit 1
+          fi
+          codesign --force --deep --sign - "$APP_PATH"
+
+      - name: Package Assets (Unix)
+        if: matrix.build.os != 'windows-latest'
+        run: |
+          VERSION=${{ github.ref_name }}
+          if [ -z "$VERSION" ]; then VERSION="v1.0.0"; fi
+          cd build/bin
+          if [ "${{ matrix.build.os }}" == "macos-latest" ]; then
+            APP_PATH="$(find . -maxdepth 1 -type d -name '*.app' | head -n 1)"
+            ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "../../${{ matrix.build.asset_name }}-${VERSION}.zip"
+          else
+            zip -r "../../${{ matrix.build.asset_name }}-${VERSION}.zip" *
+          fi
+
+      - name: Package Assets (Windows)
+        if: matrix.build.os == 'windows-latest'
+        run: |
+          $VERSION = "${{ github.ref_name }}"
+          if (-not $VERSION) { $VERSION = "v1.0.0" }
+          cd build/bin
+          Compress-Archive -Path * -DestinationPath "../../${{ matrix.build.asset_name }}-$VERSION.zip"
+        shell: pwsh
+
+      - name: Upload Release Asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.build.name }}-zip
+          path: "*.zip"
+          compression-level: 0
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: "*-zip"
+          merge-multiple: true
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: quickcull ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: "artifacts/*.zip"

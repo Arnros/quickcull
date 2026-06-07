@@ -1,0 +1,57 @@
+# Test data
+test_samples/
+note.txt
+
+# Binaries and build artifacts
+quickcull
+dist/
+internal/frontendassets/webdist/dist/
+internal/frontendassets/webdist/assets/
+internal/frontendassets/webdist/favicon.svg
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage
+*.test
+*.out
+coverage.txt
+coverage.out
+test-results/
+playwright-report/
+ui/test-results/
+ui/playwright-report/
+
+# Logs
+*.log
+
+# Local development files (Metadata)
+.stars
+.rotations
+.position
+phash.json
+thumbs/
+.trash/
+
+# Dependency directories
+vendor/
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+.history/
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+quickcull_test

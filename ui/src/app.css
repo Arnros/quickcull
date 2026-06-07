@@ -1,0 +1,24 @@
+@import "./lib/styles/editorial.tokens.css";
+@import "./lib/styles/editorial.base.css";
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay-bg);
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: var(--blur-md);
+}
+
+.key {
+  font-size: var(--text-xs);
+  padding: 2px var(--space-1-5);
+  background: var(--key-bg);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-weight: 600;
+  border: 1px solid var(--border-subtle);
+  font-family: var(--mono);
+}

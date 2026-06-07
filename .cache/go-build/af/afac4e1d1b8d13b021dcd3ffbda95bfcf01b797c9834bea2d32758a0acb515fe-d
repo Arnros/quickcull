@@ -1,0 +1,3 @@
+./types.go
+./video.go
+./video_test.go

@@ -1,0 +1,150 @@
+:root {
+  /* Palette */
+  --color-slate-50: #f8fafc;
+  --color-slate-100: #f1f5f9;
+  --color-slate-200: #e2e8f0;
+  --color-slate-300: #cbd5e1;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #64748b;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1e293b;
+  --color-slate-900: #0f172a;
+  --color-slate-950: #020617;
+
+  --color-amber-300: #fcd34d;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-emerald-500: #10b981;
+  --color-red-500: #ef4444;
+  --color-blue-500: #3b82f6;
+  --color-purple-500: #8b5cf6;
+
+  /* Semantic */
+  --accent: var(--color-amber-500);
+  --accent-hover: var(--color-amber-400);
+  --accent-rgb: 245, 158, 11;
+  --accent-dim: rgba(var(--accent-rgb), 0.15);
+  --danger: var(--color-red-500);
+  --danger-dim: rgba(239, 68, 68, 0.12);
+  --success: var(--color-emerald-500);
+  --on-accent: var(--color-slate-950);
+  --on-star: var(--color-slate-950);
+  --star: var(--color-amber-300);
+  --star-rgb: 252, 211, 77;
+  --star-dim: rgba(var(--star-rgb), 0.16);
+
+  --label-1: var(--color-red-500);
+  --label-2: var(--color-amber-500);
+  --label-3: var(--color-emerald-500);
+  --label-4: var(--color-blue-500);
+  --label-5: var(--color-purple-500);
+
+  /* Type */
+  --sans: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", serif;
+  --mono: "JetBrains Mono", "Cascadia Code", monospace;
+
+  --text-xs: 10px;
+  --text-sm: 11px;
+  --text-caption: 12px;
+  --text-base: 13px;
+  --text-md: 15px;
+  --text-lg: 16px;
+
+  /* Space */
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
+  --radius-full: 999px;
+
+  /* Elevation */
+  --shadow-main: rgba(0, 0, 0, 0.5);
+  --shadow-item: 0 6px 18px rgba(0, 0, 0, 0.28);
+  --shadow-badge: 0 4px 10px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 26px 68px rgba(0, 0, 0, 0.5);
+  --shadow-overlay: rgba(2, 6, 23, 0.72);
+
+  /* Motion */
+  --transition-fast: 0.1s;
+  --transition-base: 0.2s;
+  --transition-slow: 0.3s;
+  --easing: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Z-index */
+  --z-below: -1;
+  --z-base: 0;
+  --z-bar: 10;
+  --z-dropdown: 20;
+  --z-badge: 30;
+  --z-overlay: 60;
+  --z-raised: 100;
+  --z-grid: 200;
+  --z-selection: 300;
+  --z-modal: 1000;
+  --z-toast: 2000;
+
+  --blur-sm: blur(8px);
+  --blur-md: blur(16px);
+  --blur-lg: blur(20px);
+
+  /* Dark */
+  --bg-app: var(--color-slate-900);
+  --bg-surface: color-mix(in srgb, #0f172a 78%, transparent);
+  --bg-input: var(--color-slate-800);
+  --bg-inset: rgba(0, 0, 0, 0.2);
+  --bg-hover-subtle: rgba(255, 255, 255, 0.06);
+  --overlay-bg: rgba(2, 6, 23, 0.82);
+  --overlay-tinted: rgba(0, 0, 0, 0.55);
+  --modal-bg: var(--color-slate-800);
+  --border-main: rgba(255, 255, 255, 0.12);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --dot-border: rgba(255, 255, 255, 0.2);
+  --text-main: var(--color-slate-50);
+  --text-muted: var(--color-slate-400);
+  --viewer-bg: radial-gradient(circle, #1e293b 0%, #020617 100%);
+  --key-bg: rgba(255, 255, 255, 0.08);
+  --key-border: rgba(255, 255, 255, 0.16);
+  --topbar-bg: linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 92%, transparent), var(--bg-app));
+  --topbar-border: var(--border-main);
+}
+
+.theme-light {
+  --bg-app: var(--color-slate-50);
+  --bg-surface: color-mix(in srgb, white 78%, transparent);
+  --bg-input: var(--color-slate-100);
+  --bg-inset: rgba(0, 0, 0, 0.03);
+  --bg-hover-subtle: rgba(0, 0, 0, 0.05);
+  --overlay-bg: rgba(255, 255, 255, 0.82);
+  --overlay-tinted: rgba(255, 255, 255, 0.55);
+  --modal-bg: #ffffff;
+  --border-main: rgba(0, 0, 0, 0.1);
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --dot-border: rgba(0, 0, 0, 0.1);
+  --text-main: var(--color-slate-900);
+  --text-muted: var(--color-slate-500);
+  --viewer-bg: var(--color-slate-50);
+  --key-bg: rgba(0, 0, 0, 0.05);
+  --key-border: rgba(0, 0, 0, 0.14);
+  --topbar-bg: linear-gradient(180deg, color-mix(in srgb, #fff 82%, transparent), var(--bg-app));
+  --topbar-border: rgba(0, 0, 0, 0.08);
+  --shadow-item: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-main: rgba(0, 0, 0, 0.06);
+  --shadow-badge: 0 4px 10px rgba(0, 0, 0, 0.12);
+  --shadow-modal: 0 20px 56px rgba(0, 0, 0, 0.15);
+  --shadow-overlay: rgba(255, 255, 255, 0.72);
+}

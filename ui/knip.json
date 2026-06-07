@@ -1,0 +1,7 @@
+{
+    "ignore": [
+        "wailsjs/**",
+        "wailsjs/**/*.js",
+        "wailsjs/**/*.ts"
+    ]
+}

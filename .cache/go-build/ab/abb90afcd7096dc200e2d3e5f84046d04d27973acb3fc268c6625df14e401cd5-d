@@ -1,0 +1,7 @@
+./cmd.go
+./config.go
+./directives.go
+./format.go
+./lint.go
+./sarif.go
+./stats_posix.go

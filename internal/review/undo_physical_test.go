@@ -1,0 +1,256 @@
+package review
+
+import (
+	"os"
+	"path/filepath"
+	"quickcull/internal/bus"
+	"quickcull/internal/domain"
+	"testing"
+)
+
+// TestUndoTrashRestoresOriginalPosition verifies that undoing a trash re-inserts the photo
+// at its original index in the visible order, not at the end.
+func TestUndoTrashRestoresOriginalPosition(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "quickcull-undo-pos-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create three files: a.jpg, b.jpg, c.jpg (alphabetical → indices 0,1,2)
+	for _, name := range []string{"a.jpg", "b.jpg", "c.jpg"} {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("fake"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := NewServer()
+	if err := srv.LoadState(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	state := srv.getState()
+	if state.Len() != 3 {
+		t.Fatalf("Expected 3 files, got %d", state.Len())
+	}
+
+	// Trash b.jpg (index 1) physically, then record event with OriginalIndex=1
+	if _, err := state.Trash(1); err != nil {
+		t.Fatalf("Trash failed: %v", err)
+	}
+	if state.Len() != 2 {
+		t.Fatalf("Expected 2 files after trash, got %d", state.Len())
+	}
+
+	trashEvent := bus.Event{
+		Type: bus.TypeCommandTrashPhoto,
+		Payload: bus.CommandTrashPhotoPayload{
+			PhotoID:       "b.jpg",
+			OriginalIndex: 1,
+		},
+	}
+	if applied, _, err := srv.applyEvent(trashEvent); err != nil || !applied {
+		t.Fatalf("Trash event failed: applied=%v err=%v", applied, err)
+	}
+
+	// Undo → b.jpg should be restored at index 1 (between a.jpg and c.jpg)
+	undoEvent := bus.Event{Type: bus.TypeCommandUndo, Payload: bus.CommandUndoPayload{}}
+	if applied, _, err := srv.applyEvent(undoEvent); err != nil || !applied {
+		t.Fatalf("Undo failed: applied=%v err=%v", applied, err)
+	}
+
+	if state.Len() != 3 {
+		t.Fatalf("Expected 3 files after undo, got %d", state.Len())
+	}
+
+	// Verify b.jpg is at index 1, not at end
+	idx := state.FindIndex("b.jpg")
+	if idx != 1 {
+		t.Errorf("b.jpg should be at index 1 after undo, got %d", idx)
+	}
+	// Verify order is preserved: a.jpg=0, b.jpg=1, c.jpg=2
+	if state.FindIndex("a.jpg") != 0 {
+		t.Errorf("a.jpg should be at index 0, got %d", state.FindIndex("a.jpg"))
+	}
+	if state.FindIndex("c.jpg") != 2 {
+		t.Errorf("c.jpg should be at index 2, got %d", state.FindIndex("c.jpg"))
+	}
+}
+
+// TestUndoBatchTrashRestoresOriginalPositions verifies that undoing a batch-trash
+// command re-inserts every photo at its original index, not at the end of the list.
+func TestUndoBatchTrashRestoresOriginalPositions(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "quickcull-undo-batch-pos-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create five files; alphabetical order → indices 0..4
+	files := []string{"a.jpg", "b.jpg", "c.jpg", "d.jpg", "e.jpg"}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("fake"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := NewServer()
+	if err := srv.LoadState(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	state := srv.getState()
+	if state.Len() != 5 {
+		t.Fatalf("want 5 files, got %d", state.Len())
+	}
+
+	// Trash b.jpg (original index 1) and d.jpg (original index 3) as a batch.
+	// Record indices BEFORE physical removal, matching what App.Trash does.
+	bIdx := state.FindIndex("b.jpg") // 1
+	dIdx := state.FindIndex("d.jpg") // 3
+	if bIdx != 1 || dIdx != 3 {
+		t.Fatalf("unexpected pre-trash indices: b=%d d=%d", bIdx, dIdx)
+	}
+
+	if _, err := state.TrashMultiplePaths([]string{"b.jpg", "d.jpg"}); err != nil {
+		t.Fatalf("TrashMultiplePaths: %v", err)
+	}
+	if state.Len() != 3 {
+		t.Fatalf("want 3 files after trash, got %d", state.Len())
+	}
+
+	batchEv := bus.Event{
+		Type: bus.TypeCommandBatch,
+		Payload: bus.CommandBatchPayload{Events: []bus.Event{
+			{Type: bus.TypeCommandTrashPhoto, Payload: bus.CommandTrashPhotoPayload{
+				PhotoID: "b.jpg", OldIsTrashed: false, OriginalIndex: bIdx,
+			}},
+			{Type: bus.TypeCommandTrashPhoto, Payload: bus.CommandTrashPhotoPayload{
+				PhotoID: "d.jpg", OldIsTrashed: false, OriginalIndex: dIdx,
+			}},
+		}},
+	}
+	if applied, _, err := srv.applyEvent(batchEv); err != nil || !applied {
+		t.Fatalf("batch trash event: applied=%v err=%v", applied, err)
+	}
+
+	// Undo → b.jpg and d.jpg must come back at their original positions.
+	undoEv := bus.Event{Type: bus.TypeCommandUndo, Payload: bus.CommandUndoPayload{}}
+	if applied, _, err := srv.applyEvent(undoEv); err != nil || !applied {
+		t.Fatalf("undo: applied=%v err=%v", applied, err)
+	}
+
+	if state.Len() != 5 {
+		t.Fatalf("want 5 files after undo, got %d", state.Len())
+	}
+
+	want := map[string]int{"a.jpg": 0, "b.jpg": 1, "c.jpg": 2, "d.jpg": 3, "e.jpg": 4}
+	for name, wantIdx := range want {
+		if gotIdx := state.FindIndex(name); gotIdx != wantIdx {
+			t.Errorf("%s: want index %d, got %d", name, wantIdx, gotIdx)
+		}
+	}
+
+	// Verify physical restoration: files must be back in the root, not in .trash/.
+	trashRoot := filepath.Join(tmpDir, domain.DirTrash)
+	for _, name := range []string{"b.jpg", "d.jpg"} {
+		if _, err := os.Stat(filepath.Join(tmpDir, name)); os.IsNotExist(err) {
+			t.Errorf("%s: file missing from root after undo", name)
+		}
+		if _, err := os.Stat(filepath.Join(trashRoot, name)); err == nil {
+			t.Errorf("%s: file still in .trash after undo", name)
+		}
+	}
+}
+
+func TestUndoPhysicalTrashRestoration(t *testing.T) {
+	// 1. Setup temporary directory with a test file
+	tmpDir, err := os.MkdirTemp("", "quickcull-undo-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	fileName := "test.jpg"
+	filePath := filepath.Join(tmpDir, fileName)
+	if err := os.WriteFile(filePath, []byte("fake-image-data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Initialize server and load state
+	srv := NewServer()
+	// Disable background analysis for deterministic test
+	if err := srv.LoadState(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+
+	state := srv.getState()
+	if state.Len() != 1 {
+		t.Fatalf("Expected 1 file, got %d", state.Len())
+	}
+
+	// 3. Perform TRASH action via App-like flow
+	// We simulate what App.Trash does: physically move + publish event
+	trashPath := filepath.Join(tmpDir, domain.DirTrash, fileName)
+	
+	// Use the actual state.Trash to move the file
+	newTotal, err := state.Trash(0)
+	if err != nil {
+		t.Fatalf("Trash failed: %v", err)
+	}
+	if newTotal != 0 {
+		t.Errorf("Expected 0 files after trash, got %d", newTotal)
+	}
+
+	// Verify file is in trash
+	if _, err := os.Stat(trashPath); os.IsNotExist(err) {
+		t.Error("File should be in .trash folder")
+	}
+	if _, err := os.Stat(filePath); err == nil {
+		t.Error("File should NOT be in original location")
+	}
+
+	// Record the event in AppState manually as App.Trash would have done
+	trashEvent := bus.Event{
+		Type: bus.TypeCommandTrashPhoto,
+		Payload: bus.CommandTrashPhotoPayload{
+			PhotoID: fileName,
+		},
+	}
+	// Use applyEvent for trash too, to ensure InitialState is correctly setup
+	appliedTrash, _, err := srv.applyEvent(trashEvent)
+	if err != nil {
+		t.Fatalf("Trash event failed: %v", err)
+	}
+	if !appliedTrash {
+		t.Fatal("Trash event not applied")
+	}
+
+	// 4. Perform UNDO via applyEvent (the core logic we fixed)
+	undoEvent := bus.Event{
+		Type:    bus.TypeCommandUndo,
+		Payload: bus.CommandUndoPayload{},
+	}
+	
+	applied, undoneEvent, err := srv.applyEvent(undoEvent)
+	if err != nil {
+		t.Fatalf("Undo failed: %v", err)
+	}
+	if !applied {
+		t.Fatal("Undo was not applied")
+	}
+	if undoneEvent.Type != bus.TypeCommandTrashPhoto {
+		t.Errorf("Expected undone event to be Trash, got %v", undoneEvent.Type)
+	}
+
+	// 5. VERIFY PHYSICAL RESTORATION
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		t.Error("CRITICAL: File was NOT restored to original location after Undo")
+	}
+	if _, err := os.Stat(trashPath); err == nil {
+		t.Error("File should NOT be in .trash folder after Undo")
+	}
+
+	// Verify state consistency
+	if state.Len() != 1 {
+		t.Errorf("Expected state to have 1 file after Undo, got %d", state.Len())
+	}
+}

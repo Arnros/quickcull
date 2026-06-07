@@ -1,0 +1,74 @@
+html,
+body {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 8% 6%, rgba(var(--accent-rgb), 0.09), transparent 34%),
+    radial-gradient(circle at 92% 94%, rgba(var(--accent-rgb), 0.07), transparent 34%),
+    var(--bg-app);
+  color: var(--text-main);
+  font-family: var(--sans);
+  transition: background var(--transition-base), color var(--transition-base);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  transition: all var(--transition-base) var(--easing);
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-main) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-main);
+  border-radius: var(--radius-full);
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

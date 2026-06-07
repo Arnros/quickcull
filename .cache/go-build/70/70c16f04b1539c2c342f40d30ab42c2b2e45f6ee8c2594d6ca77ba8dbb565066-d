@@ -1,0 +1,13 @@
+./buffer_pool.go
+./crash.go
+./crash_nonwindows.go
+./date.go
+./exec_nonwindows.go
+./explorer.go
+./fileio.go
+./image.go
+./log_anonymizer.go
+./crash_test.go
+./date_test.go
+./explorer_test.go
+./fileio_test.go

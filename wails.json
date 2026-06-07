@@ -1,0 +1,20 @@
+{
+  "name": "quickcull",
+  "outputfilename": "quickcull",
+  "frontend:dir": "ui",
+  "frontend:install": "npm ci",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "http://localhost:5173",
+  "flags": "-tags webkit2gtk_4_1",
+  "author": {
+    "name": "aro",
+    "email": ""
+  },
+  "info": {
+    "productName": "quickcull",
+    "productVersion": "1.0.0",
+    "copyright": "MIT",
+    "comments": "The fastest way to cull and review your local photos."
+  }
+}
