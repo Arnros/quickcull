@@ -35,12 +35,45 @@ Most photo managers are editors first. `quickcull` is a **selection tool** first
 
 ## ⌨️ Keyboard Shortcuts (Default)
 
-| Layout | Previous | Next | Star | Trash |
-|---|---|---|---|---|
-| **QWERTY** | `Q` / `←` | `D` / `→` | `S` | `X` |
-| **AZERTY** | `A` / `←` | `D` / `→` | `S` | `X` |
+Quickcull automatically adapts to QWERTY or AZERTY keyboards. You can remap these at any time in **Settings > Shortcuts**.
 
-*All keys are fully customizable in **Settings > Shortcuts**.*
+### Navigation
+| Action | QWERTY | AZERTY |
+|---|---|---|
+| **Previous Photo** | `Q` / `←` / `Backspace` | `A` / `←` / `Backspace` |
+| **Next Photo** | `D` / `→` / `Space` | `D` / `→` / `Space` |
+| **Up / Down (Grid)**| `↑` / `↓` | `↑` / `↓` |
+| **First / Last** | `Home` / `End` | `Home` / `End` |
+
+### Culling & Actions
+| Action | Key | Description |
+|---|---|---|
+| **Star** | `S` | Toggle star rating |
+| **Labels 1-5** | `1`-`5` | Set color label (e.g. 1=Red, 5=Purple) |
+| **Clear Label** | `0` | Remove label |
+| **Trash** | `X` / `Del` | Move to local `.trash/` folder |
+| **Undo** | `U` | Instantly revert last action |
+
+### View & Interface
+| Action | Key | Description |
+|---|---|---|
+| **Toggle Grid** | `V` / `Enter` | Switch between single photo and grid view |
+| **Side-by-Side** | `C` | Compare multiple photos simultaneously |
+| **Zoom** | `Z` | Toggle 100% zoom |
+| **Zen Mode** | `H` | Hide all UI elements |
+| **Toggle Sidebar**| `Tab` | Show/hide left folder tree |
+| **Toggle Info** | `I` | Show/hide EXIF metadata panel |
+| **Filter Bar** | `F` | Open smart filter bar |
+| **Refresh / Sync**| `F5` | Manually rescan folder |
+| **Close / Exit** | `Escape` | Close modals, clear selection, or exit views |
+
+### Image Rotation
+| Action | Key | Description |
+|---|---|---|
+| **Rotate Left** | `L` | Visual rotation (-90°) |
+| **Rotate Right** | `R` | Visual rotation (+90°) |
+| **Reset Rotation**| `O` | Reset visual rotation to original |
+| **Write EXIF** | `W` | Permanently write rotation to image file |
 
 ## 🛡️ Reliability & Security
 
