@@ -82,6 +82,7 @@ func (s *Server) streamPhotoChunks(keys []string) {
 			"photos": chunk,
 			"index":  i,
 			"total":  len(keys),
+			"isLast": end == len(keys),
 		})
 
 		time.Sleep(syncChunkInterval)

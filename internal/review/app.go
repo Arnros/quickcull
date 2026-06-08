@@ -329,6 +329,11 @@ func (a *App) Trash(index int, path string, paths []string) (ActionResponse, err
 		removedAbsPaths = append(removedAbsPaths, abs)
 	}
 
+	newTotal, err := state.Trash(resolvedIndex)
+	if err != nil {
+		return ActionResponse{}, err
+	}
+
 	// [v2 Refactoring] Use the new Event Bus for a single trash
 	a.server.Bus.Publish(bus.Event{
 		Type: bus.TypeCommandTrashPhoto,
@@ -338,10 +343,6 @@ func (a *App) Trash(index int, path string, paths []string) (ActionResponse, err
 		},
 	})
 
-	newTotal, err := state.Trash(resolvedIndex)
-	if err != nil {
-		return ActionResponse{}, err
-	}
 	return a.finalizeAction(state, newTotal, resolvedIndex, removedAbsPaths), nil
 }
 

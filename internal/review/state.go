@@ -82,15 +82,15 @@ func (s *State) AddFile(relPath string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.pathToIndex[relPath]; ok {
-		return len(s.files)
+	if idx, ok := s.pathToIndex[relPath]; ok {
+		return idx
 	}
 
 	idx := len(s.files)
 	s.files = append(s.files, relPath)
 	s.filesLower = append(s.filesLower, strings.ToLower(relPath))
 	s.pathToIndex[relPath] = idx
-	return len(s.files)
+	return idx
 }
 
 // SortFiles performs a final sort of the discovered files.

@@ -124,13 +124,14 @@ class SyncService {
     });
 
     // v2: Chunked Delivery - Photos Chunks
-    api.onEvent(SYNC_EVENTS.STATE_PHOTOS, (data: { photos: Record<string, any>; index: number; total: number }) => {
+    api.onEvent(SYNC_EVENTS.STATE_PHOTOS, (data: { photos: Record<string, any>; index: number; total: number; isLast?: boolean }) => {
       if (!appState.v2) return;
       
       // Merge chunk into state
       Object.assign(appState.v2.Photos, data.photos);
       
-      if (data.index + Object.keys(data.photos).length >= data.total) {
+      const count = Object.keys(data.photos).length;
+      if (data.isLast || data.index + count >= data.total) {
         logger.info('v2 SyncState: All photos received', { total: data.total });
         appState.updateStarredIndices();
         

@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"log/slog"
+	"quickcull/internal/utils"
 	"runtime"
 	"sort"
 	"time"
@@ -10,7 +11,7 @@ import (
 
 func (s *Server) startGCWatchdog(ctx context.Context) {
 	// Periodic GC and memory logging for large libraries
-	go func() {
+	utils.SafeGo(func() {
 		ticker := time.NewTicker(gcWatchdogInterval)
 		defer ticker.Stop()
 		for {
@@ -26,7 +27,7 @@ func (s *Server) startGCWatchdog(ctx context.Context) {
 				}
 			}
 		}
-	}()
+	})
 }
 
 func (s *Server) emitProgress(currentProcessed int, force bool, lastEmitAt *time.Time) {

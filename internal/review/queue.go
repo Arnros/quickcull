@@ -14,6 +14,8 @@ type Item struct {
 	boostedAtMs int64 // last timestamp when item entered interactive/warm tier
 	// The index is needed by update and is maintained by the heap.Interface methods.
 	heapIndex int
+	// bucketIndex is the position in the secondary bucket index for O(1) removal.
+	bucketIndex int
 }
 
 // A PriorityQueue implements heap.Interface and holds Items.
@@ -54,6 +56,7 @@ type AnalysisQueue struct {
 	mu       sync.Mutex
 	pq       PriorityQueue
 	set      map[int]*Item
+	buckets  map[int][]*Item // secondary index by priority for O(1) tier access
 	cond     *sync.Cond
 	isClosed bool
 }
@@ -68,7 +71,8 @@ const (
 
 func NewAnalysisQueue() *AnalysisQueue {
 	q := &AnalysisQueue{
-		set: make(map[int]*Item),
+		set:     make(map[int]*Item),
+		buckets: make(map[int][]*Item),
 	}
 	q.cond = sync.NewCond(&q.mu)
 	heap.Init(&q.pq)
@@ -86,21 +90,49 @@ func (q *AnalysisQueue) Push(index int, priority int) {
 
 	if item, ok := q.set[index]; ok {
 		if priority > item.priority {
+			q.removeFromBucketLocked(item)
 			item.priority = priority
 			if priority >= priorityWarmMin {
 				item.boostedAtMs = time.Now().UnixMilli()
 			}
 			heap.Fix(&q.pq, item.heapIndex)
+			q.addToBucketLocked(item)
 		}
 	} else {
-		item := &Item{index: index, priority: priority}
+		item := &Item{index: index, priority: priority, bucketIndex: -1}
 		if priority >= priorityWarmMin {
 			item.boostedAtMs = time.Now().UnixMilli()
 		}
 		q.set[index] = item
 		heap.Push(&q.pq, item)
+		q.addToBucketLocked(item)
 		q.cond.Signal()
 	}
+}
+
+func (q *AnalysisQueue) addToBucketLocked(item *Item) {
+	bucket := q.buckets[item.priority]
+	item.bucketIndex = len(bucket)
+	q.buckets[item.priority] = append(bucket, item)
+}
+
+func (q *AnalysisQueue) removeFromBucketLocked(item *Item) {
+	if item.bucketIndex < 0 {
+		return
+	}
+	bucket := q.buckets[item.priority]
+	idx := item.bucketIndex
+	lastIdx := len(bucket) - 1
+
+	if idx != lastIdx {
+		// Swap with last item to keep removal O(1)
+		lastItem := bucket[lastIdx]
+		bucket[idx] = lastItem
+		lastItem.bucketIndex = idx
+	}
+
+	q.buckets[item.priority] = bucket[:lastIdx]
+	item.bucketIndex = -1
 }
 
 func (q *AnalysisQueue) Pop() (index int, priority int, ok bool) {
@@ -116,6 +148,7 @@ func (q *AnalysisQueue) Pop() (index int, priority int, ok bool) {
 	}
 
 	item := heap.Pop(&q.pq).(*Item)
+	q.removeFromBucketLocked(item)
 	delete(q.set, item.index)
 	return item.index, item.priority, true
 }
@@ -139,7 +172,9 @@ func (q *AnalysisQueue) PopWithTierPreference(preferred []queueTier) (index int,
 		}
 	}
 
+	// Fallback to global highest priority if no preferred tier item found
 	item := heap.Pop(&q.pq).(*Item)
+	q.removeFromBucketLocked(item)
 	delete(q.set, item.index)
 	return item.index, item.priority, true
 }
@@ -148,6 +183,7 @@ func (q *AnalysisQueue) PopWithTierPreference(preferred []queueTier) (index int,
 func (q *AnalysisQueue) DepthByTier() (interactive, warm, bulk int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
 	for _, item := range q.pq {
 		switch {
 		case item.priority >= priorityInteractiveMin:
@@ -186,48 +222,53 @@ func (q *AnalysisQueue) DecayBoostedPriorities(maxAge time.Duration) int {
 	}
 
 	for _, item := range toDecay {
+		q.removeFromBucketLocked(item)
 		item.priority = 0
 		item.boostedAtMs = 0
 		heap.Fix(&q.pq, item.heapIndex)
+		q.addToBucketLocked(item)
 		decayed++
 	}
 	return decayed
 }
 
-// popTierLocked scans the heap linearly to find the highest-priority item in
-// the requested tier. O(n) by design: the I/O cost of each popped item far
-// dominates the scan, and n is bounded by the library size (~24k max).
+// popTierLocked finds the highest-priority item in the requested tier
+// using the bucketed secondary index. O(p) where p is the priority range
+// (typically 0-100), avoiding the O(n) linear scan.
 func (q *AnalysisQueue) popTierLocked(tier queueTier) (*Item, bool) {
-	bestIdx := -1
-	bestPriority := -1
-	for i, item := range q.pq {
-		if !matchesTier(item.priority, tier) {
+	min, max := q.tierRange(tier)
+
+	// Scan buckets from highest priority in tier down to min.
+	for p := max; p >= min; p-- {
+		bucket := q.buckets[p]
+		if len(bucket) == 0 {
 			continue
 		}
-		if item.priority > bestPriority {
-			bestPriority = item.priority
-			bestIdx = i
-		}
-	}
-	if bestIdx < 0 {
-		return nil, false
+
+		// Take the last item (O(1) pop from slice)
+		item := bucket[len(bucket)-1]
+		q.buckets[p] = bucket[:len(bucket)-1]
+		item.bucketIndex = -1
+
+		// Remove from heap (O(log n))
+		heap.Remove(&q.pq, item.heapIndex)
+		delete(q.set, item.index)
+		return item, true
 	}
 
-	item := heap.Remove(&q.pq, bestIdx).(*Item)
-	delete(q.set, item.index)
-	return item, true
+	return nil, false
 }
 
-func matchesTier(priority int, tier queueTier) bool {
+func (q *AnalysisQueue) tierRange(tier queueTier) (min, max int) {
 	switch tier {
 	case tierInteractive:
-		return priority >= priorityInteractiveMin
+		return priorityInteractiveMin, 1000 // use high enough max
 	case tierWarm:
-		return priority >= priorityWarmMin && priority < priorityInteractiveMin
+		return priorityWarmMin, priorityInteractiveMin - 1
 	case tierBulk:
-		return priority < priorityWarmMin
+		return 0, priorityWarmMin - 1
 	default:
-		return false
+		return 1, 0 // empty range
 	}
 }
 
@@ -252,5 +293,6 @@ func (q *AnalysisQueue) Reset() {
 	q.isClosed = false
 	q.pq = PriorityQueue{}
 	q.set = make(map[int]*Item)
+	q.buckets = make(map[int][]*Item)
 	heap.Init(&q.pq)
 }

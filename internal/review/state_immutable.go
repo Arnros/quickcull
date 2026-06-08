@@ -226,27 +226,40 @@ func applyUndo(currentState *AppState, nextState AppState) (*AppState, bus.Event
 	// For Trash, the caller will handle the physical restoration.
 	switch payload := undoneEvent.Payload.(type) {
 	case bus.CommandToggleStarPayload:
-		photo := nextState.Photos[payload.PhotoID]
+		photo, ok := nextState.Photos[payload.PhotoID]
+		if !ok {
+			break
+		}
 		wasStarred := photo.IsStarred
 		photo.IsStarred = payload.OldStarred
 		nextState.Photos[payload.PhotoID] = photo
 		if photo.IsStarred && !wasStarred {
 			nextState.StarredCount++
 		} else if !photo.IsStarred && wasStarred {
-			nextState.StarredCount--
+			if nextState.StarredCount > 0 {
+				nextState.StarredCount--
+			}
 		}
 	case bus.CommandTrashPhotoPayload:
-		photo := nextState.Photos[payload.PhotoID]
+		photo, ok := nextState.Photos[payload.PhotoID]
+		if !ok {
+			break
+		}
 		wasTrash := photo.IsTrashed
 		photo.IsTrashed = payload.OldIsTrashed
 		nextState.Photos[payload.PhotoID] = photo
 		if photo.IsTrashed && !wasTrash {
 			nextState.TrashedCount++
 		} else if !photo.IsTrashed && wasTrash {
-			nextState.TrashedCount--
+			if nextState.TrashedCount > 0 {
+				nextState.TrashedCount--
+			}
 		}
 	case bus.CommandLabelPhotoPayload:
-		photo := nextState.Photos[payload.PhotoID]
+		photo, ok := nextState.Photos[payload.PhotoID]
+		if !ok {
+			break
+		}
 		newLabel := photo.Label
 		oldLabel := payload.OldLabel
 		photo.Label = oldLabel
@@ -254,7 +267,9 @@ func applyUndo(currentState *AppState, nextState AppState) (*AppState, bus.Event
 
 		// Sync global counts
 		if newLabel > noLabel && oldLabel == noLabel {
-			nextState.LabeledCount--
+			if nextState.LabeledCount > 0 {
+				nextState.LabeledCount--
+			}
 		} else if newLabel == noLabel && oldLabel > noLabel {
 			nextState.LabeledCount++
 		}
@@ -273,34 +288,49 @@ func applyUndo(currentState *AppState, nextState AppState) (*AppState, bus.Event
 			subEvent := payload.Events[i]
 			switch p := subEvent.Payload.(type) {
 			case bus.CommandToggleStarPayload:
-				photo := nextState.Photos[p.PhotoID]
+				photo, ok := nextState.Photos[p.PhotoID]
+				if !ok {
+					continue
+				}
 				wasStarred := photo.IsStarred
 				photo.IsStarred = p.OldStarred
 				nextState.Photos[p.PhotoID] = photo
 				if photo.IsStarred && !wasStarred {
 					nextState.StarredCount++
 				} else if !photo.IsStarred && wasStarred {
-					nextState.StarredCount--
+					if nextState.StarredCount > 0 {
+						nextState.StarredCount--
+					}
 				}
 			case bus.CommandLabelPhotoPayload:
-				photo := nextState.Photos[p.PhotoID]
+				photo, ok := nextState.Photos[p.PhotoID]
+				if !ok {
+					continue
+				}
 				newLabel := photo.Label
 				photo.Label = p.OldLabel
 				nextState.Photos[p.PhotoID] = photo
 				if newLabel > noLabel && p.OldLabel == noLabel {
-					nextState.LabeledCount--
+					if nextState.LabeledCount > 0 {
+						nextState.LabeledCount--
+					}
 				} else if newLabel == noLabel && p.OldLabel > noLabel {
 					nextState.LabeledCount++
 				}
 			case bus.CommandTrashPhotoPayload:
-				photo := nextState.Photos[p.PhotoID]
+				photo, ok := nextState.Photos[p.PhotoID]
+				if !ok {
+					continue
+				}
 				wasTrash := photo.IsTrashed
 				photo.IsTrashed = p.OldIsTrashed
 				nextState.Photos[p.PhotoID] = photo
 				if photo.IsTrashed && !wasTrash {
 					nextState.TrashedCount++
 				} else if !photo.IsTrashed && wasTrash {
-					nextState.TrashedCount--
+					if nextState.TrashedCount > 0 {
+						nextState.TrashedCount--
+					}
 				}
 			case bus.CommandRotatePhotoPayload:
 				switch p.Direction {
@@ -390,7 +420,9 @@ func applyRotatePhoto(s *AppState, photoID, direction string) {
 	if !wasRotated && isRotated {
 		s.RotatedCount++
 	} else if wasRotated && !isRotated {
-		s.RotatedCount--
+		if s.RotatedCount > 0 {
+			s.RotatedCount--
+		}
 	}
 	slog.Debug("Reducer: Applied RotatePhoto", "photo", photoID, "rotation", photo.Rotation)
 }

@@ -510,9 +510,9 @@ func (c *MediaCache) GetMetadata(path string) *EXIFInfo {
 			if info.Camera == rawNoExiftoolCameraKey && internalexif.IsExiftoolAvailable() {
 				// Continue to extraction path below.
 			} else
-			// Keep cached metadata when it already carries useful filter fields.
-			// Re-extract only for truly empty records.
-			if (info.Width != 0 && info.Height != 0) || info.Camera != "" || info.ISO != "" || info.Date != "" {
+			// Keep cached metadata once we have a fingerprint (meaning we tried extraction)
+			// or if it already carries useful fields.
+			if info.Fingerprint != "" || info.Camera != "" || info.ISO != "" || info.Date != "" || (info.Width != 0 && info.Height != 0) {
 				c.mu.Lock()
 				c.exifCache[path] = info
 				c.mu.Unlock()
