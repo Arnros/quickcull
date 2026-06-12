@@ -192,17 +192,18 @@ class AppState {
   actionTrail = $state<ActionTrailItem[]>([]);
   runtimeCapabilities = $state<review.RuntimeCapabilities | null>(null);
   
-  starredIndices = $state<number[]>([]);
-
-  public updateStarredIndices(): void {
+  starredIndices = $derived.by<number[]>(() => {
     if (!this.v2 || !this.v2.VisibleOrder) {
-      this.starredIndices = [];
-      return;
+      return [];
     }
     const photos = this.v2.Photos;
-    this.starredIndices = this.v2.VisibleOrder
+    return this.v2.VisibleOrder
       .map((id, index) => photos[id]?.IsStarred ? index : -1)
       .filter(idx => idx !== -1);
+  });
+
+  public updateStarredIndices(): void {
+    // No-op: starredIndices is now a derived property.
   }
 
   selectedIndices = $state<number[]>([]);
@@ -949,6 +950,22 @@ class AppState {
     const target = Math.max(0, this.currentIndex - columns);
     if (shift) this.select(target, multi, true);
     else this.loadFile(target, false); // isManualClick = false so loadFile updates pivot
+  }
+
+  gridPageUp(shift: boolean = false, multi: boolean = false): void {
+    const columns = this.gridColumns || 4;
+    const rows = 4; // Jump 4 rows
+    const target = Math.max(0, this.currentIndex - (columns * rows));
+    if (shift) this.select(target, multi, true);
+    else this.loadFile(target, false);
+  }
+
+  gridPageDown(shift: boolean = false, multi: boolean = false): void {
+    const columns = this.gridColumns || 4;
+    const rows = 4; // Jump 4 rows
+    const target = Math.min((this.v2?.VisibleOrder?.length || 1) - 1, this.currentIndex + (columns * rows));
+    if (shift) this.select(target, multi, true);
+    else this.loadFile(target, false);
   }
 }
 

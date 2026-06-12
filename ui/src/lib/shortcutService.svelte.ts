@@ -3,7 +3,7 @@ import { resolveShortcutContext } from './shortcutContext';
 import { logger } from './logger';
 
 export type ShortcutActionId =
-  | 'NAV_PREV' | 'NAV_NEXT' | 'NAV_UP' | 'NAV_DOWN' | 'NAV_FIRST' | 'NAV_LAST' | 'NAV_SIDEBAR' | 'NAV_FILMSTRIP'
+  | 'NAV_PREV' | 'NAV_NEXT' | 'NAV_UP' | 'NAV_DOWN' | 'NAV_PAGE_UP' | 'NAV_PAGE_DOWN' | 'NAV_FIRST' | 'NAV_LAST' | 'NAV_SIDEBAR' | 'NAV_FILMSTRIP'
   | 'VIEW_GRID' | 'VIEW_INFO' | 'VIEW_FILTERS' | 'VIEW_ZOOM'
   | 'VIEW_ZEN' | 'VIEW_COMPARISON' | 'VIEW_TOGGLE_GRID'
   | 'ACTION_STAR' | 'ACTION_TRASH' | 'ACTION_UNDO'
@@ -116,6 +116,18 @@ class ShortcutService {
           if (this.currentContext.screen === 'review_grid') appState.gridNextRow(e.shiftKey, e.shiftKey && (e.ctrlKey || e.metaKey));
           else appState.next(e.shiftKey, e.shiftKey && (e.ctrlKey || e.metaKey));
         }, defaultQwerty: ['arrowdown'], defaultAzerty: ['arrowdown']
+      },
+      {
+        id: 'NAV_PAGE_UP', descriptionKey: 'help_nav_page_up', category: 'navigation', action: (e) => {
+          if (this.currentContext.screen === 'review_grid') appState.gridPageUp(e.shiftKey, e.shiftKey && (e.ctrlKey || e.metaKey));
+          else appState.prev(e.shiftKey, e.shiftKey && (e.ctrlKey || e.metaKey));
+        }, defaultQwerty: ['pageup'], defaultAzerty: ['pageup']
+      },
+      {
+        id: 'NAV_PAGE_DOWN', descriptionKey: 'help_nav_page_down', category: 'navigation', action: (e) => {
+          if (this.currentContext.screen === 'review_grid') appState.gridPageDown(e.shiftKey, e.shiftKey && (e.ctrlKey || e.metaKey));
+          else appState.next(e.shiftKey, e.shiftKey && (e.ctrlKey || e.metaKey));
+        }, defaultQwerty: ['pagedown'], defaultAzerty: ['pagedown']
       },
       { id: 'NAV_FIRST', descriptionKey: 'help_nav_first', category: 'navigation', action: (e) => appState.first(e.shiftKey, e.shiftKey && (e.ctrlKey || e.metaKey)), defaultQwerty: ['home'], defaultAzerty: ['home'] },
       { id: 'NAV_LAST', descriptionKey: 'help_nav_last', category: 'navigation', action: (e) => appState.last(e.shiftKey, e.shiftKey && (e.ctrlKey || e.metaKey)), defaultQwerty: ['end'], defaultAzerty: ['end'] },

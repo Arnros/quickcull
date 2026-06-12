@@ -124,9 +124,22 @@ class TrashService {
           ? res.index
           : appState.currentIndex;
 
-        await appState.refreshAfterStateMutation(targetIndex, {
-          refreshFilters: hasActiveFiltering(appState.filterMode, appState.activeFilters)
-        });
+        const updates: Promise<unknown>[] = [
+          appState.refreshAfterStateMutation(targetIndex, {
+            refreshFilters: hasActiveFiltering(appState.filterMode, appState.activeFilters)
+          })
+        ];
+
+        if (res.actionType === 'trash') {
+          updates.push(appState.loadFolders());
+          updates.push(appState.loadFilters());
+          if (appState.filterMode === FILTER_MODES.DUPLICATES) {
+            appState.duplicateGroups = [];
+            updates.push(appState.updateFilteredIndices());
+          }
+        }
+
+        await Promise.all(updates);
 
         const key = UNDO_ACTION_KEY[res.actionType] || 'action_undone';
         toastService.success(i18n.t(key));

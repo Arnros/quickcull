@@ -8,6 +8,8 @@ vi.mock('./api', () => ({
     setLabel: vi.fn(),
     getStarredIndices: vi.fn(),
     getFile: vi.fn(),
+    getFolders: vi.fn(),
+    getFilters: vi.fn(),
   },
 }));
 
@@ -202,6 +204,34 @@ describe('AppState cache-busting on media-changing actions', () => {
       expect(navigationService.loadFile).toHaveBeenCalled();
     });
     expect(appState.sessionVersion).toBeGreaterThan(before);
+  });
+
+  it('loads folders and filters when undoing a trash action', async () => {
+    const loadFoldersSpy = vi.spyOn(appState, 'loadFolders').mockResolvedValue(undefined);
+    const loadFiltersSpy = vi.spyOn(appState, 'loadFilters').mockResolvedValue(undefined);
+
+    (api.undo as any).mockResolvedValue({
+      index: 0,
+      actionType: 'trash',
+      stats: {
+        total: 2,
+        initialTotal: 3,
+        trashedCount: 1,
+        starredCount: 0,
+        labeledCount: 0,
+        rotatedCount: 0,
+        undoLen: 1,
+        savedPosition: 0,
+        heicSupported: false,
+      },
+    });
+
+    await appState.undo();
+
+    await vi.waitFor(() => {
+      expect(loadFoldersSpy).toHaveBeenCalled();
+      expect(loadFiltersSpy).toHaveBeenCalled();
+    });
   });
 
   it('trashes explicitly selected single file when different from current', async () => {

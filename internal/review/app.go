@@ -309,8 +309,10 @@ func (a *App) Trash(index int, path string, paths []string) (ActionResponse, err
 			return ActionResponse{}, err
 		}
 
-		// Publish appropriate event based on count
-		a.publishTrashEvents(events)
+		// Apply trash events synchronously
+		if err := a.applyTrashEvents(events); err != nil {
+			return ActionResponse{}, err
+		}
 		return a.finalizeAction(state, newTotal, targetIndex, removedAbsPaths), nil
 	}
 
@@ -331,30 +333,35 @@ func (a *App) Trash(index int, path string, paths []string) (ActionResponse, err
 		return ActionResponse{}, err
 	}
 
-	// Publish single trash event
-	a.server.Bus.Publish(bus.Event{
+	// Apply single trash event synchronously
+	_, _, err = a.server.applyEvent(bus.Event{
 		Type: bus.TypeCommandTrashPhoto,
 		Payload: bus.CommandTrashPhotoPayload{
 			PhotoID:       actualPath,
 			OriginalIndex: resolvedIndex,
 		},
 	})
+	if err != nil {
+		return ActionResponse{}, err
+	}
 
 	return a.finalizeAction(state, newTotal, targetIndex, removedAbsPaths), nil
 }
 
-// publishTrashEvents publishes the appropriate trash event(s) based on count.
+// applyTrashEvents applies the appropriate trash event(s) synchronously based on count.
 // Uses a single event for one file, or a batch event for multiple files.
-func (a *App) publishTrashEvents(events []bus.Event) {
+func (a *App) applyTrashEvents(events []bus.Event) error {
+	var err error
 	switch len(events) {
 	case 1:
-		a.server.Bus.Publish(events[0])
+		_, _, err = a.server.applyEvent(events[0])
 	default:
-		a.server.Bus.Publish(bus.Event{
+		_, _, err = a.server.applyEvent(bus.Event{
 			Type:    bus.TypeCommandBatch,
 			Payload: bus.CommandBatchPayload{Events: events},
 		})
 	}
+	return err
 }
 
 // GetConfig returns the app configuration
@@ -364,7 +371,11 @@ func (a *App) GetConfig() (domain.Config, error) {
 
 // UpdateConfig updates the app configuration
 func (a *App) UpdateConfig(cfg domain.Config) error {
-	return domain.UpdateConfig(cfg)
+	err := domain.UpdateConfig(cfg)
+	if err == nil {
+		exif.ResetExiftoolAvailabilityCache()
+	}
+	return err
 }
 
 // GetFolders returns current state folders
@@ -823,20 +834,20 @@ func (a *App) GetBookmarks() (BookmarkResponse, error) {
 
 // ResetStars clears all stars in the current folder
 func (a *App) ResetStars() error {
-	a.server.Bus.Publish(bus.Event{
+	_, _, err := a.server.applyEvent(bus.Event{
 		Type:    bus.TypeCommandResetMetadata,
 		Payload: bus.CommandResetMetadataPayload{Scope: "stars"},
 	})
-	return nil
+	return err
 }
 
 // ResetLabels clears all labels in the current folder
 func (a *App) ResetLabels() error {
-	a.server.Bus.Publish(bus.Event{
+	_, _, err := a.server.applyEvent(bus.Event{
 		Type:    bus.TypeCommandResetMetadata,
 		Payload: bus.CommandResetMetadataPayload{Scope: "labels"},
 	})
-	return nil
+	return err
 }
 
 // ResetAppCache clears the whole application cache directory but preserves the config file.

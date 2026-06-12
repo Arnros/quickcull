@@ -112,3 +112,34 @@ func TestSaveConfigDurableWriteRecoversWhenTempPathIsDirectory(t *testing.T) {
 		t.Fatalf("config was not updated after recovering from temp directory: %+v", got)
 	}
 }
+
+func TestExiftoolPath(t *testing.T) {
+	// Trigger lazy load once so subsequent calls don't read from disk and overwrite mock
+	_ = GetConfig()
+
+	configMu.Lock()
+	orig := config
+	configMu.Unlock()
+	t.Cleanup(func() {
+		configMu.Lock()
+		config = orig
+		configMu.Unlock()
+	})
+
+	// Case 1: Configured path is absolute and non-empty
+	configMu.Lock()
+	config = Config{ExiftoolPath: "/some/custom/path/exiftool"}
+	configMu.Unlock()
+	if got := ExiftoolPath(); got != "/some/custom/path/exiftool" {
+		t.Errorf("ExiftoolPath() = %q, expected %q", got, "/some/custom/path/exiftool")
+	}
+
+	// Case 2: Configured path is empty, falls back to PATH lookup or auto-detection
+	configMu.Lock()
+	config = Config{ExiftoolPath: ""}
+	configMu.Unlock()
+	got := ExiftoolPath()
+	if got == "" {
+		t.Error("ExiftoolPath() returned empty string for empty config path")
+	}
+}

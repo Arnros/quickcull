@@ -537,18 +537,27 @@ func (s *Server) serveFullMedia(w http.ResponseWriter, r *http.Request, absPath 
 
 	// FAST PATH: Browser GPU decoding for web-native formats.
 	if ft == domain.FileTypeJPEG || ft == domain.FileTypePNG || ft == domain.FileTypeWebP {
-		s.ServeFile(w, r, absPath, "")
+		var mimeType string
+		switch ft {
+		case domain.FileTypeJPEG:
+			mimeType = "image/jpeg"
+		case domain.FileTypePNG:
+			mimeType = "image/png"
+		case domain.FileTypeWebP:
+			mimeType = "image/webp"
+		}
+		s.ServeFile(w, r, absPath, mimeType)
 		return
 	}
 
-	// SLOW PATH: RAW/HEIC/Video conversion.
+	// SLOW PATH: RAW/HEIC/Video conversion. All processed images are JPEGs.
 	processedPath, errProc := s.ResolveProcessedPath(absPath)
 	if errProc != nil {
 		slog.Error("Failed to resolve processed path", "source", absPath, "error", errProc)
 		s.servePlaceholder(w)
 		return
 	}
-	s.ServeFile(w, r, processedPath, "")
+	s.ServeFile(w, r, processedPath, "image/jpeg")
 }
 
 func (s *Server) servePlaceholder(w http.ResponseWriter) {

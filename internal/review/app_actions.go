@@ -32,17 +32,21 @@ func (a *App) executeBatchAction(paths []string, actionType bus.EventType, paylo
 		events = append(events, bus.Event{Type: actionType, Payload: payload})
 	}
 
+	var err error
 	switch len(events) {
 	case 0:
 		// nothing to do
 	case 1:
-		a.server.Bus.Publish(events[0])
+		_, _, err = a.server.applyEvent(events[0])
 	default:
 		// Wrap in a single batch event so one Undo reverts all changes at once.
-		a.server.Bus.Publish(bus.Event{
+		_, _, err = a.server.applyEvent(bus.Event{
 			Type:    bus.TypeCommandBatch,
 			Payload: bus.CommandBatchPayload{Events: events},
 		})
+	}
+	if err != nil {
+		return nil, err
 	}
 	slog.Debug("ExecuteBatchAction: batch action completed", "action", actionType, "count", len(events))
 	return &ActionResponse{Stats: a.snapshotStats(), Ok: true}, nil
@@ -50,10 +54,14 @@ func (a *App) executeBatchAction(paths []string, actionType bus.EventType, paylo
 
 // executePhotoActionVerified is a generic helper for simple metadata actions when state is already verified.
 func (a *App) executePhotoActionVerified(state *State, eventType bus.EventType, payload any) (ActionResponse, error) {
-	a.server.Bus.Publish(bus.Event{
+	ev := bus.Event{
 		Type:    eventType,
 		Payload: payload,
-	})
+	}
+	_, _, err := a.server.applyEvent(ev)
+	if err != nil {
+		return ActionResponse{}, err
+	}
 
 	return ActionResponse{Stats: a.snapshotStats(), Ok: true}, nil
 }

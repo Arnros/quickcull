@@ -70,8 +70,9 @@ func (s *Server) applyEvent(ev bus.Event) (bool, bus.Event, error) {
 		}
 	}
 
-	// For structural changes, send SyncState with IsPartial=true
-	s.broadcastAppState(nextState, true, false)
+	// For structural changes, send SyncState with IsPartial=true and include only affected photos
+	affected := affectedPhotosFromEvent(appliedEvent)
+	s.broadcastAppStateSelective(nextState, true, affected)
 	
 	return true, appliedEvent, nil
 }
@@ -142,4 +143,22 @@ func batchHasStructuralEvents(events []bus.Event) bool {
 		}
 	}
 	return false
+}
+
+// affectedPhotosFromEvent extracts all photo IDs affected by a given event or batch event.
+func affectedPhotosFromEvent(ev bus.Event) []string {
+	var paths []string
+	switch p := ev.Payload.(type) {
+	case bus.CommandBatchPayload:
+		for _, sub := range p.Events {
+			if id := photoIDFromPayload(sub.Payload); id != "" {
+				paths = append(paths, id)
+			}
+		}
+	default:
+		if id := photoIDFromPayload(ev.Payload); id != "" {
+			paths = append(paths, id)
+		}
+	}
+	return paths
 }

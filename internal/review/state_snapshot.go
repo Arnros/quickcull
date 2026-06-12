@@ -14,3 +14,22 @@ func BuildSyncSnapshot(state AppState, includePhotos bool) AppState {
 
 	return snapshot
 }
+
+// BuildSyncSnapshotSelective creates an AppState snapshot containing only the photos in affectedPhotos.
+func BuildSyncSnapshotSelective(state AppState, isPartial bool, affectedPhotos []string) AppState {
+	snapshot := state.Clone(false)
+	snapshot.IsPartial = isPartial
+	snapshot.InitialState = nil
+	snapshot.History = nil
+	snapshot.UndoLen = len(state.History)
+
+	if len(affectedPhotos) > 0 && state.Photos != nil {
+		snapshot.Photos = make(map[string]Photo, len(affectedPhotos))
+		for _, path := range affectedPhotos {
+			if p, ok := state.Photos[path]; ok {
+				snapshot.Photos[path] = p
+			}
+		}
+	}
+	return snapshot
+}

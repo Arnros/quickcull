@@ -22,14 +22,8 @@
   });
 
   // Cache the full items array to avoid re-allocating for large folders
-  let fullItemsArray = $state<number[]>([]);
-  $effect(() => {
-    const total = appState.v2?.VisibleOrder?.length || 0;
-    if (fullItemsArray.length !== total) {
-      // Optimized: only re-create the array if the count changed
-      fullItemsArray = Array.from({ length: total }, (_, i) => i);
-    }
-  });
+  let visibleCount = $derived(appState.v2?.VisibleOrder?.length || 0);
+  let fullItemsArray = $derived(Array.from({ length: visibleCount }, (_, i) => i));
 
   /**
    * Items list with optional null spacers to force visual line-breaks between

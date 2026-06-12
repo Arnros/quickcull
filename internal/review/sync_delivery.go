@@ -148,3 +148,12 @@ func (s *Server) broadcastAppState(state *AppState, isPartial bool, includePhoto
 	snapshot.IsPartial = isPartial
 	s.broadcast(eventSyncState, snapshot)
 }
+
+// broadcastAppStateSelective assembles and emits a SyncState payload with selective photos metadata.
+func (s *Server) broadcastAppStateSelective(state *AppState, isPartial bool, affectedPhotos []string) {
+	if state == nil {
+		return
+	}
+	snapshot := BuildSyncSnapshotSelective(*state, isPartial, affectedPhotos)
+	s.broadcast(eventSyncState, snapshot)
+}

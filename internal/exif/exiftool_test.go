@@ -90,3 +90,25 @@ func TestExecuteBinary_RespectsContextCancellation(t *testing.T) {
 type nopWriteCloser struct{ io.Writer }
 
 func (n nopWriteCloser) Close() error { return nil }
+
+func TestIsExiftoolAvailable_ResetCache(t *testing.T) {
+	// Call once to initialize/cache the value
+	_ = IsExiftoolAvailable()
+
+	exiftoolAvailableMu.Lock()
+	if !exiftoolAvailableInit {
+		exiftoolAvailableMu.Unlock()
+		t.Fatal("expected exiftool cache to be initialized")
+	}
+	exiftoolAvailableMu.Unlock()
+
+	// Reset the cache
+	ResetExiftoolAvailabilityCache()
+
+	exiftoolAvailableMu.Lock()
+	if exiftoolAvailableInit {
+		exiftoolAvailableMu.Unlock()
+		t.Fatal("expected exiftool cache to be reset (uninitialized)")
+	}
+	exiftoolAvailableMu.Unlock()
+}

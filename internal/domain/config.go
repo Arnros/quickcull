@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"quickcull/internal/utils"
+	"runtime"
 	"sync"
 )
 
@@ -188,11 +190,65 @@ func saveConfig() error {
 	return utils.AtomicWriteFileDurable(path, data, configFilePerm)
 }
 
-// ExiftoolPath returns configured exiftool path or the default binary name.
+// ExiftoolPath returns configured exiftool path or searches common locations,
+// falling back to the default binary name if not found.
 func ExiftoolPath() string {
 	path := GetConfig().ExiftoolPath
-	if path == "" {
-		return defaultExiftoolBinary
+	if path != "" {
+		return path
 	}
-	return path
+
+	// 1. Try LookPath first (checks system PATH)
+	binaryName := defaultExiftoolBinary
+	if runtime.GOOS == "windows" {
+		binaryName = "exiftool.exe"
+	}
+	if p, err := exec.LookPath(binaryName); err == nil {
+		return p
+	}
+
+	// 2. Check the directory of the running executable (useful for portable setups)
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		var target string
+		if runtime.GOOS == "windows" {
+			target = filepath.Join(exeDir, "exiftool.exe")
+		} else {
+			target = filepath.Join(exeDir, "exiftool")
+		}
+		if info, err := os.Stat(target); err == nil && !info.IsDir() {
+			return target
+		}
+	}
+
+	// 3. Search common absolute installation paths on Unix-like and Windows systems
+	var commonPaths []string
+	if runtime.GOOS == "windows" {
+		commonPaths = []string{
+			`C:\Windows\exiftool.exe`,
+			`C:\Program Files\exiftool\exiftool.exe`,
+			`C:\Program Files (x86)\exiftool\exiftool.exe`,
+		}
+	} else {
+		commonPaths = []string{
+			"/opt/homebrew/bin/exiftool",
+			"/usr/local/bin/exiftool",
+			"/usr/bin/exiftool",
+			"/bin/exiftool",
+		}
+	}
+
+	for _, cp := range commonPaths {
+		if info, err := os.Stat(cp); err == nil && !info.IsDir() {
+			if runtime.GOOS == "windows" {
+				return cp
+			}
+			// Check if executable on Unix
+			if info.Mode()&0111 != 0 {
+				return cp
+			}
+		}
+	}
+
+	return binaryName
 }

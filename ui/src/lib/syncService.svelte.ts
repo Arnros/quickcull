@@ -161,18 +161,21 @@ class SyncService {
       const oldSelectionPivot = appState.selectionPivot;
       const isUndoOperation = appState.lastNonUndoableAction === 'undo';
 
-      appState.v2 = data;
-      
-      // If IsPartial is true, we MUST preserve existing photos to avoid wiping the UI.
-      // This only applies if we are in the same folder.
       const isSameFolder = oldRoot === data.Root;
+      let preservedPhotos: Record<string, any>;
       if (data.IsPartial && isSameFolder && oldPhotos && Object.keys(oldPhotos).length > 0) {
-        logger.info('v2 SyncState: Preserving existing photos map for structural update');
-        appState.v2.Photos = oldPhotos;
+        preservedPhotos = { ...oldPhotos };
+        if (incomingPhotos) {
+          Object.assign(preservedPhotos, incomingPhotos);
+        }
       } else {
-        // Full update, new folder, or truly empty folder: use incoming photos
-        appState.v2.Photos = incomingPhotos;
+        preservedPhotos = incomingPhotos;
       }
+
+      appState.v2 = {
+        ...data,
+        Photos: preservedPhotos
+      };
       
       appState.selectedIndices = remapSelectedIndices(oldVisibleOrder, data.VisibleOrder, oldSelectedIndices);
       appState.updateStarredIndices();

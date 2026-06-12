@@ -99,7 +99,7 @@ class NavigationService {
         this.currentFile = file;
         this.referenceFile = refFile;
 
-        if (!isManualClick && appState.selectedIndices.length <= 1) {
+        if (!isManualClick) {
           appState.selectedIndices = [this.currentIndex];
         }
       }

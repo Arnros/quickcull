@@ -201,16 +201,38 @@ func Cleanup() {
 }
 
 var (
-	exiftoolAvailableOnce   sync.Once
-	exiftoolAvailableResult bool
+	exiftoolAvailableMu     sync.RWMutex
+	exiftoolAvailableCached bool
+	exiftoolAvailableInit   bool
 )
 
 func IsExiftoolAvailable() bool {
-	exiftoolAvailableOnce.Do(func() {
-		_, err := exec.LookPath(domain.ExiftoolPath())
-		exiftoolAvailableResult = err == nil
-	})
-	return exiftoolAvailableResult
+	exiftoolAvailableMu.RLock()
+	if exiftoolAvailableInit {
+		res := exiftoolAvailableCached
+		exiftoolAvailableMu.RUnlock()
+		return res
+	}
+	exiftoolAvailableMu.RUnlock()
+
+	exiftoolAvailableMu.Lock()
+	defer exiftoolAvailableMu.Unlock()
+	if exiftoolAvailableInit {
+		return exiftoolAvailableCached
+	}
+
+	_, err := exec.LookPath(domain.ExiftoolPath())
+	exiftoolAvailableCached = err == nil
+	exiftoolAvailableInit = true
+	return exiftoolAvailableCached
+}
+
+// ResetExiftoolAvailabilityCache resets the cached exiftool availability check.
+// This should be called whenever the application configuration changes.
+func ResetExiftoolAvailabilityCache() {
+	exiftoolAvailableMu.Lock()
+	exiftoolAvailableInit = false
+	exiftoolAvailableMu.Unlock()
 }
 
 func ExiftoolSignature() string {
