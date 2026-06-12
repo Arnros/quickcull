@@ -32,7 +32,7 @@
   class="btn {variant} {className}"
   class:active
   {disabled}
-  {title}
+  data-tooltip={title}
   aria-label={ariaLabel || title}
   {onclick}
 >
@@ -148,5 +148,81 @@
   .active {
     border-color: rgba(var(--accent-rgb), 0.7);
     background: rgba(var(--accent-rgb), 0.12);
+  }
+
+  /* Custom Tooltips */
+  [data-tooltip] {
+    position: relative;
+  }
+
+  [data-tooltip]:before,
+  [data-tooltip]:after {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 120ms var(--easing);
+    z-index: var(--z-modal);
+    visibility: hidden;
+  }
+
+  /* Tooltip content bubble */
+  [data-tooltip]:before {
+    content: attr(data-tooltip);
+    bottom: 125%;
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    background: var(--bg-app);
+    color: var(--text-main);
+    font-size: var(--text-xs);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    font-family: var(--sans);
+    white-space: nowrap;
+    padding: var(--space-1-5) var(--space-2-5);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-main);
+    box-shadow: var(--shadow-badge);
+    backdrop-filter: var(--blur-sm);
+    -webkit-backdrop-filter: var(--blur-sm);
+  }
+
+  /* Tooltip arrow pointer */
+  [data-tooltip]:after {
+    content: '';
+    bottom: 110%;
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    border-width: 6px 6px 0;
+    border-style: solid;
+    border-color: var(--border-main) transparent transparent;
+  }
+
+  /* Bottom Tooltips placement overrides */
+  :global(.tooltip-bottom)[data-tooltip]:before {
+    bottom: auto;
+    top: 125%;
+    transform: translateX(-50%) translateY(-4px);
+  }
+
+  :global(.tooltip-bottom)[data-tooltip]:after {
+    bottom: auto;
+    top: 110%;
+    transform: translateX(-50%) translateY(-4px);
+    border-width: 0 6px 6px;
+    border-color: transparent transparent var(--border-main);
+  }
+
+  /* Hover and active states for tooltips */
+  [data-tooltip]:hover:not(:disabled):before,
+  [data-tooltip]:hover:not(:disabled):after {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* If the tooltip is empty, do not show it */
+  [data-tooltip=""]:before,
+  [data-tooltip=""]:after {
+    display: none !important;
   }
 </style>

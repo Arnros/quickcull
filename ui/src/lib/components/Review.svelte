@@ -19,6 +19,31 @@
   let leftImageDecoded = $state(false);
   let rightImageDecoded = $state(false);
 
+  let lastIndex = $state(appState.currentIndex);
+  let direction = $state<'next' | 'prev'>('next');
+
+  $effect(() => {
+    const curr = appState.currentIndex;
+    if (curr !== lastIndex) {
+      const total = appState.stats?.total || 0;
+      const diff = curr - lastIndex;
+      if (total > 1) {
+        if (diff === -(total - 1)) {
+          direction = 'next';
+        } else if (diff === total - 1) {
+          direction = 'prev';
+        } else {
+          direction = diff > 0 ? 'next' : 'prev';
+        }
+      } else {
+        direction = diff > 0 ? 'next' : 'prev';
+      }
+      lastIndex = curr;
+    }
+  });
+
+  let slideOffset = $derived(direction === 'next' ? '12px' : '-12px');
+
   let mediaUrl = $derived(
     appState.currentFile
       ? `${appState.getFullUrl(appState.currentFile.index)}&tx=${appState.currentFile.txID}&r=${mediaRetry}`
@@ -116,7 +141,7 @@
                 alt="comparison-reference"
                 class="comparison-img"
                 class:loaded={leftImageDecoded}
-                style="transform: rotate({appState.referenceFile?.rotation || 0}deg)"
+                style="--rot: {appState.referenceFile?.rotation || 0}deg; --slide-offset: 0px"
                 onload={() => leftImageDecoded = true}
               />
             </div>
@@ -143,7 +168,7 @@
                 alt="comparison-active"
                 class="comparison-img"
                 class:loaded={rightImageDecoded}
-                style="transform: rotate({appState.currentFile?.rotation || 0}deg)"
+                style="--rot: {appState.currentFile?.rotation || 0}deg; --slide-offset: {slideOffset}"
                 onload={() => rightImageDecoded = true}
               />
             </div>
@@ -174,7 +199,7 @@
                     src={mediaUrl}
                     alt={appState.currentFile.filename}
                     class:loaded={imageDecoded}
-                    style="transform: rotate({appState.currentFile.rotation}deg)"
+                    style="--rot: {appState.currentFile.rotation}deg; --slide-offset: {slideOffset}"
                     onload={() => imageDecoded = true}
                     onerror={() => {
                       if (mediaRetry < 1) {
@@ -442,14 +467,16 @@
     height: 100%;
     object-fit: contain;
     opacity: 0;
-    transition: opacity var(--transition-base) ease-in-out;
+    transform: translate3d(var(--slide-offset, 0px), 0, 0) rotate(var(--rot, 0deg));
+    transition: opacity 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
     /* Trigger GPU acceleration */
-    will-change: transform;
+    will-change: transform, opacity;
     backface-visibility: hidden;
     transform-style: preserve-3d;
   }
   .loaded {
     opacity: 1 !important;
+    transform: translate3d(0, 0, 0) rotate(var(--rot, 0deg)) !important;
   }
 
   .viewer.zoomed .main-pane:not(.comparison-mode) img,

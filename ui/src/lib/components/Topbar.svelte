@@ -42,6 +42,7 @@
       <Button
         variant="ghost"
         icon="folder"
+        class="tooltip-bottom"
         onclick={() => (appState.view = "picker")}
         title={i18n.t("open_another")}
       >
@@ -90,46 +91,48 @@
     </div>
 
     <div class="right">
-      <Button variant="ghost" icon="eye" onclick={() => (appState.zenMode = !appState.zenMode)} title={`${i18n.t("zen")} (H)`} ariaLabel={i18n.t("zen")} />
-      <Button variant="ghost" icon="refresh" onclick={() => appState.refresh()} title={`${i18n.t("refresh")} (F5)`} ariaLabel={i18n.t("refresh")} />
+      <Button variant="ghost" icon="eye" class="tooltip-bottom" onclick={() => (appState.zenMode = !appState.zenMode)} title={`${i18n.t("zen")} (H)`} ariaLabel={i18n.t("zen")} />
+      <Button variant="ghost" icon="refresh" class="tooltip-bottom" onclick={() => appState.refresh()} title={`${i18n.t("refresh")} (F5)`} ariaLabel={i18n.t("refresh")} />
       <Button 
         variant="ghost" 
         icon={appState.sortOrder === 'name' ? 'clock' : 'sort'} 
+        class="tooltip-bottom"
         onclick={() => appState.setSortOrder(appState.sortOrder === 'name' ? 'date' : 'name')} 
         title={`${i18n.t("sort")} (${appState.sortOrder === 'name' ? 'Date' : 'Name'})`} 
         ariaLabel={i18n.t("sort")}
       />
-      <Button variant="ghost" icon={appState.config?.theme === "light" ? "moon" : "sun"} onclick={() => appState.toggleTheme()} title={i18n.t('toggle_theme')} ariaLabel={i18n.t('toggle_theme_desc')} />
-      <Button variant="ghost" icon="settings" onclick={() => (appState.settingsOpen = !appState.settingsOpen)} title={i18n.t("settings")} />
-      <Button variant="ghost" icon="help" onclick={() => (appState.helpOpen = !appState.helpOpen)} title={`${i18n.t("help")} (?)`} />
+      <Button variant="ghost" icon={appState.config?.theme === "light" ? "moon" : "sun"} class="tooltip-bottom" onclick={() => appState.toggleTheme()} title={i18n.t('toggle_theme')} ariaLabel={i18n.t('toggle_theme_desc')} />
+      <Button variant="ghost" icon="settings" class="tooltip-bottom" onclick={() => (appState.settingsOpen = !appState.settingsOpen)} title={i18n.t("settings")} />
+      <Button variant="ghost" icon="help" class="tooltip-bottom" onclick={() => (appState.helpOpen = !appState.helpOpen)} title={`${i18n.t("help")} (?)`} />
     </div>
   </div>
 
   <div class="row row-tools">
     <div class="left tools-wrap">
-      <Button variant="secondary" icon="folder" active={appState.sidebarOpen} onclick={() => (appState.sidebarOpen = !appState.sidebarOpen)}>
+      <Button variant="secondary" icon="folder" class="tooltip-bottom" active={appState.sidebarOpen} onclick={() => (appState.sidebarOpen = !appState.sidebarOpen)}>
         <Kbd key="Tab" variant="outline" />
         {i18n.t("folders")}
       </Button>
-      <Button variant="secondary" icon="film" active={appState.filmstripOpen} onclick={() => (appState.filmstripOpen = !appState.filmstripOpen)}>
+      <Button variant="secondary" icon="film" class="tooltip-bottom" active={appState.filmstripOpen} onclick={() => (appState.filmstripOpen = !appState.filmstripOpen)}>
         <Kbd key="G" variant="outline" />
         {i18n.t("filmstrip")}
       </Button>
-      <Button variant="secondary" icon="grid" active={appState.gridOpen} onclick={() => (appState.gridOpen = !appState.gridOpen)}>
+      <Button variant="secondary" icon="grid" class="tooltip-bottom" active={appState.gridOpen} onclick={() => (appState.gridOpen = !appState.gridOpen)}>
         <Kbd key="V" variant="outline" />
         {i18n.t("grid")}
       </Button>
-      <Button variant="secondary" icon="info" active={appState.infoOpen} onclick={() => (appState.infoOpen = !appState.infoOpen)}>
+      <Button variant="secondary" icon="info" class="tooltip-bottom" active={appState.infoOpen} onclick={() => (appState.infoOpen = !appState.infoOpen)}>
         <Kbd key="I" variant="outline" />
         {i18n.t("info")}
       </Button>
-      <Button variant="secondary" icon="compare" active={appState.comparisonMode} onclick={() => appState.toggleComparisonMode()} title={`${i18n.t("comparison")} (C)`}>
+      <Button variant="secondary" icon="compare" class="tooltip-bottom" active={appState.comparisonMode} onclick={() => appState.toggleComparisonMode()} title={`${i18n.t("comparison")} (C)`}>
         <Kbd key="C" variant="outline" />
         {i18n.t("comparison")}
       </Button>
       <Button
         variant="secondary"
         icon="compare"
+        class="tooltip-bottom"
         active={appState.filterMode === "duplicates"}
         onclick={() => appState.toggleDuplicatesFilter()}
         title={i18n.t("show_duplicates")}
@@ -140,7 +143,7 @@
         variant="ghost"
         icon="filter"
         active={appState.filterBarOpen}
-        class={appState.filterMode !== "none" || hasCustomFilters ? "filter-active" : ""}
+        class="tooltip-bottom {appState.filterMode !== 'none' || hasCustomFilters ? 'filter-active' : ''}"
         onclick={() => {
           appState.filterBarOpen = !appState.filterBarOpen;
           if (appState.filterBarOpen) {
@@ -161,7 +164,7 @@
           variant="secondary"
           icon="check"
           disabled={!appState.canApplyRotation()}
-          class={appState.canApplyRotation() ? "apply-active" : ""}
+          class="tooltip-bottom {appState.canApplyRotation() ? 'apply-active' : ''}"
           onclick={() => appState.applyRotation()}
           title={i18n.t("apply")}
         >
@@ -172,6 +175,7 @@
           variant="secondary" 
           icon="refresh" 
           disabled={!appState.hasPendingRotation()} 
+          class="tooltip-bottom"
           onclick={() => appState.rotateReset()}
           title={i18n.t("reset")}
         >
