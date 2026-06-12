@@ -277,11 +277,14 @@ func (a *App) Trash(index int, path string, paths []string) (ActionResponse, err
 		return ActionResponse{}, err
 	}
 
-	removedAbsPaths := make([]string, 0, len(paths)+1)
+	var targetIndex int
+	var removedAbsPaths []string
 
 	// Multi-select by explicit paths is safer against stale indices.
 	if len(paths) > 0 {
 		slog.Debug("Trashing multiple files", "paths", paths)
+		targetIndex = index
+		// Collect absolute paths and create events
 		var events []bus.Event
 		for _, rel := range paths {
 			idx := state.FindIndex(rel)
@@ -306,25 +309,19 @@ func (a *App) Trash(index int, path string, paths []string) (ActionResponse, err
 			return ActionResponse{}, err
 		}
 
-		// [v2 Refactoring] Wrap in a single CommandBatch so undo reverts all at once.
-		switch len(events) {
-		case 1:
-			a.server.Bus.Publish(events[0])
-		default:
-			a.server.Bus.Publish(bus.Event{
-				Type:    bus.TypeCommandBatch,
-				Payload: bus.CommandBatchPayload{Events: events},
-			})
-		}
-		return a.finalizeAction(state, newTotal, index, removedAbsPaths), nil
+		// Publish appropriate event based on count
+		a.publishTrashEvents(events)
+		return a.finalizeAction(state, newTotal, targetIndex, removedAbsPaths), nil
 	}
 
+	// Single file trash
 	state, actualPath, resolvedIndex, err := a.verifyFile(index, path)
 	if err != nil {
 		return ActionResponse{}, err
 	}
 
 	slog.Debug("Trashing single file", "index", resolvedIndex, "path", actualPath)
+	targetIndex = resolvedIndex
 	if abs, err := state.AbsPath(resolvedIndex); err == nil {
 		removedAbsPaths = append(removedAbsPaths, abs)
 	}
@@ -334,7 +331,7 @@ func (a *App) Trash(index int, path string, paths []string) (ActionResponse, err
 		return ActionResponse{}, err
 	}
 
-	// [v2 Refactoring] Use the new Event Bus for a single trash
+	// Publish single trash event
 	a.server.Bus.Publish(bus.Event{
 		Type: bus.TypeCommandTrashPhoto,
 		Payload: bus.CommandTrashPhotoPayload{
@@ -343,7 +340,21 @@ func (a *App) Trash(index int, path string, paths []string) (ActionResponse, err
 		},
 	})
 
-	return a.finalizeAction(state, newTotal, resolvedIndex, removedAbsPaths), nil
+	return a.finalizeAction(state, newTotal, targetIndex, removedAbsPaths), nil
+}
+
+// publishTrashEvents publishes the appropriate trash event(s) based on count.
+// Uses a single event for one file, or a batch event for multiple files.
+func (a *App) publishTrashEvents(events []bus.Event) {
+	switch len(events) {
+	case 1:
+		a.server.Bus.Publish(events[0])
+	default:
+		a.server.Bus.Publish(bus.Event{
+			Type:    bus.TypeCommandBatch,
+			Payload: bus.CommandBatchPayload{Events: events},
+		})
+	}
 }
 
 // GetConfig returns the app configuration

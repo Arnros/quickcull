@@ -231,11 +231,19 @@ func applyUndo(currentState *AppState, nextState AppState) (*AppState, bus.Event
 			break
 		}
 		wasStarred := photo.IsStarred
-		photo.IsStarred = payload.OldStarred
-		nextState.Photos[payload.PhotoID] = photo
-		if photo.IsStarred && !wasStarred {
+		// Create new immutable photo with reverted state
+		newPhoto := photo
+		newPhoto.IsStarred = payload.OldStarred
+		// Create new map to avoid mutating the original
+		newPhotos := make(map[string]Photo, len(nextState.Photos))
+		for k, v := range nextState.Photos {
+			newPhotos[k] = v
+		}
+		newPhotos[payload.PhotoID] = newPhoto
+		nextState.Photos = newPhotos
+		if newPhoto.IsStarred && !wasStarred {
 			nextState.StarredCount++
-		} else if !photo.IsStarred && wasStarred {
+		} else if !newPhoto.IsStarred && wasStarred {
 			if nextState.StarredCount > 0 {
 				nextState.StarredCount--
 			}
@@ -246,11 +254,19 @@ func applyUndo(currentState *AppState, nextState AppState) (*AppState, bus.Event
 			break
 		}
 		wasTrash := photo.IsTrashed
-		photo.IsTrashed = payload.OldIsTrashed
-		nextState.Photos[payload.PhotoID] = photo
-		if photo.IsTrashed && !wasTrash {
+		// Create new immutable photo with reverted state
+		newPhoto := photo
+		newPhoto.IsTrashed = payload.OldIsTrashed
+		// Create new map to avoid mutating the original
+		newPhotos := make(map[string]Photo, len(nextState.Photos))
+		for k, v := range nextState.Photos {
+			newPhotos[k] = v
+		}
+		newPhotos[payload.PhotoID] = newPhoto
+		nextState.Photos = newPhotos
+		if newPhoto.IsTrashed && !wasTrash {
 			nextState.TrashedCount++
-		} else if !photo.IsTrashed && wasTrash {
+		} else if !newPhoto.IsTrashed && wasTrash {
 			if nextState.TrashedCount > 0 {
 				nextState.TrashedCount--
 			}
@@ -262,8 +278,16 @@ func applyUndo(currentState *AppState, nextState AppState) (*AppState, bus.Event
 		}
 		newLabel := photo.Label
 		oldLabel := payload.OldLabel
-		photo.Label = oldLabel
-		nextState.Photos[payload.PhotoID] = photo
+		// Create new immutable photo with reverted state
+		newPhoto := photo
+		newPhoto.Label = oldLabel
+		// Create new map to avoid mutating the original
+		newPhotos := make(map[string]Photo, len(nextState.Photos))
+		for k, v := range nextState.Photos {
+			newPhotos[k] = v
+		}
+		newPhotos[payload.PhotoID] = newPhoto
+		nextState.Photos = newPhotos
 
 		// Sync global counts
 		if newLabel > noLabel && oldLabel == noLabel {
@@ -275,41 +299,89 @@ func applyUndo(currentState *AppState, nextState AppState) (*AppState, bus.Event
 		}
 	case bus.CommandRotatePhotoPayload:
 		// Note: Rotation doesn't store old value, we invert the direction.
+		// Handle immutably: create new photo with inverted rotation
+		photo, ok := nextState.Photos[payload.PhotoID]
+		if !ok {
+			break
+		}
+		// Invert the direction for undo
+		invertDir := ""
 		switch payload.Direction {
 		case rotationLeft:
-			applyRotatePhoto(&nextState, payload.PhotoID, rotationRight)
+			invertDir = rotationRight
 		case rotationRight:
-			applyRotatePhoto(&nextState, payload.PhotoID, rotationLeft)
+			invertDir = rotationLeft
+		case rotationReset:
+			// Reset cannot be undone easily without old value, skip
+			break
 		}
-		// Reset cannot be undone easily without old value.
+		if invertDir == "" {
+			break
+		}
+		// Create new photo with inverted rotation
+		newPhoto := photo
+		wasRotated := photo.Rotation != 0
+		switch invertDir {
+		case rotationLeft:
+			newPhoto.Rotation = (photo.Rotation - rotationStep) % rotationModulus
+			if newPhoto.Rotation < 0 {
+				newPhoto.Rotation += rotationModulus
+			}
+		case rotationRight:
+			newPhoto.Rotation = (photo.Rotation + rotationStep) % rotationModulus
+		}
+		isRotated := newPhoto.Rotation != 0
+		// Create new map to avoid mutating the original
+		newPhotos := make(map[string]Photo, len(nextState.Photos))
+		for k, v := range nextState.Photos {
+			newPhotos[k] = v
+		}
+		newPhotos[payload.PhotoID] = newPhoto
+		nextState.Photos = newPhotos
+		// Update count
+		if !wasRotated && isRotated {
+			nextState.RotatedCount++
+		} else if wasRotated && !isRotated {
+			if nextState.RotatedCount > 0 {
+				nextState.RotatedCount--
+			}
+		}
 	case bus.CommandBatchPayload:
 		// Undo all sub-events in reverse order.
+		// Create new photos map once for the entire batch to preserve immutability
+		newPhotos := make(map[string]Photo, len(nextState.Photos))
+		for k, v := range nextState.Photos {
+			newPhotos[k] = v
+		}
+		
 		for i := len(payload.Events) - 1; i >= 0; i-- {
 			subEvent := payload.Events[i]
 			switch p := subEvent.Payload.(type) {
 			case bus.CommandToggleStarPayload:
-				photo, ok := nextState.Photos[p.PhotoID]
+				photo, ok := newPhotos[p.PhotoID]
 				if !ok {
 					continue
 				}
 				wasStarred := photo.IsStarred
-				photo.IsStarred = p.OldStarred
-				nextState.Photos[p.PhotoID] = photo
-				if photo.IsStarred && !wasStarred {
+				newPhoto := photo
+				newPhoto.IsStarred = p.OldStarred
+				newPhotos[p.PhotoID] = newPhoto
+				if newPhoto.IsStarred && !wasStarred {
 					nextState.StarredCount++
-				} else if !photo.IsStarred && wasStarred {
+				} else if !newPhoto.IsStarred && wasStarred {
 					if nextState.StarredCount > 0 {
 						nextState.StarredCount--
 					}
 				}
 			case bus.CommandLabelPhotoPayload:
-				photo, ok := nextState.Photos[p.PhotoID]
+				photo, ok := newPhotos[p.PhotoID]
 				if !ok {
 					continue
 				}
 				newLabel := photo.Label
-				photo.Label = p.OldLabel
-				nextState.Photos[p.PhotoID] = photo
+				newPhoto := photo
+				newPhoto.Label = p.OldLabel
+				newPhotos[p.PhotoID] = newPhoto
 				if newLabel > noLabel && p.OldLabel == noLabel {
 					if nextState.LabeledCount > 0 {
 						nextState.LabeledCount--
@@ -318,29 +390,50 @@ func applyUndo(currentState *AppState, nextState AppState) (*AppState, bus.Event
 					nextState.LabeledCount++
 				}
 			case bus.CommandTrashPhotoPayload:
-				photo, ok := nextState.Photos[p.PhotoID]
+				photo, ok := newPhotos[p.PhotoID]
 				if !ok {
 					continue
 				}
 				wasTrash := photo.IsTrashed
-				photo.IsTrashed = p.OldIsTrashed
-				nextState.Photos[p.PhotoID] = photo
-				if photo.IsTrashed && !wasTrash {
+				newPhoto := photo
+				newPhoto.IsTrashed = p.OldIsTrashed
+				newPhotos[p.PhotoID] = newPhoto
+				if newPhoto.IsTrashed && !wasTrash {
 					nextState.TrashedCount++
-				} else if !photo.IsTrashed && wasTrash {
+				} else if !newPhoto.IsTrashed && wasTrash {
 					if nextState.TrashedCount > 0 {
 						nextState.TrashedCount--
 					}
 				}
 			case bus.CommandRotatePhotoPayload:
+				photo, ok := newPhotos[p.PhotoID]
+				if !ok {
+					continue
+				}
+				wasRotated := photo.Rotation != 0
+				newPhoto := photo
+				// Invert the direction for undo
 				switch p.Direction {
 				case rotationLeft:
-					applyRotatePhoto(&nextState, p.PhotoID, rotationRight)
+					newPhoto.Rotation = (photo.Rotation + rotationStep) % rotationModulus
 				case rotationRight:
-					applyRotatePhoto(&nextState, p.PhotoID, rotationLeft)
+					newPhoto.Rotation = (photo.Rotation - rotationStep) % rotationModulus
+					if newPhoto.Rotation < 0 {
+						newPhoto.Rotation += rotationModulus
+					}
+				}
+				isRotated := newPhoto.Rotation != 0
+				newPhotos[p.PhotoID] = newPhoto
+				if !wasRotated && isRotated {
+					nextState.RotatedCount++
+				} else if wasRotated && !isRotated {
+					if nextState.RotatedCount > 0 {
+						nextState.RotatedCount--
+					}
 				}
 			}
 		}
+		nextState.Photos = newPhotos
 	}
 
 	return &nextState, undoneEvent, nil

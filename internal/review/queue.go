@@ -268,7 +268,7 @@ func (q *AnalysisQueue) tierRange(tier queueTier) (min, max int) {
 	case tierBulk:
 		return 0, priorityWarmMin - 1
 	default:
-		return 1, 0 // empty range
+		return 1, 0 // empty range (max < min ensures loop doesn't execute)
 	}
 }
 
