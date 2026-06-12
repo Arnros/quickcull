@@ -15,6 +15,10 @@
   import { resolveShortcutContext } from "../shortcutContext";
 
   let mediaRetry = $state(0);
+  let imageDecoded = $state(false);
+  let leftImageDecoded = $state(false);
+  let rightImageDecoded = $state(false);
+
   let mediaUrl = $derived(
     appState.currentFile
       ? `${appState.getFullUrl(appState.currentFile.index)}&tx=${appState.currentFile.txID}&r=${mediaRetry}`
@@ -24,6 +28,15 @@
     // Reset retry counter when the selected file changes.
     appState.currentFile?.filename;
     mediaRetry = 0;
+    imageDecoded = false;
+  });
+  $effect(() => {
+    appState.comparisonIndex;
+    leftImageDecoded = false;
+  });
+  $effect(() => {
+    appState.currentIndex;
+    rightImageDecoded = false;
   });
   let shortcutCtx = $derived(resolveShortcutContext({
     view: appState.view,
@@ -101,8 +114,10 @@
               <img
                 src={appState.getFullUrl(leftIdx)}
                 alt="comparison-reference"
-                class="comparison-img loaded"
+                class="comparison-img"
+                class:loaded={leftImageDecoded}
                 style="transform: rotate({appState.referenceFile?.rotation || 0}deg)"
+                onload={() => leftImageDecoded = true}
               />
             </div>
             <div class="comparison-label">
@@ -126,8 +141,10 @@
               <img
                 src={appState.getFullUrl(rightIdx)}
                 alt="comparison-active"
-                class="comparison-img loaded"
+                class="comparison-img"
+                class:loaded={rightImageDecoded}
                 style="transform: rotate({appState.currentFile?.rotation || 0}deg)"
+                onload={() => rightImageDecoded = true}
               />
             </div>
             <div class="comparison-label active">
@@ -156,8 +173,9 @@
                   <img
                     src={mediaUrl}
                     alt={appState.currentFile.filename}
-                    class:loaded={!appState.loading}
+                    class:loaded={imageDecoded}
                     style="transform: rotate({appState.currentFile.rotation}deg)"
+                    onload={() => imageDecoded = true}
                     onerror={() => {
                       if (mediaRetry < 1) {
                         mediaRetry += 1;
@@ -191,14 +209,16 @@
           {/if}
         {/if}
         
-        <!-- Smart Prefetch: Preload next 2 images -->
+        <!-- Smart Prefetch: Preload next 2 images and previous 1 image -->
         {#if appState.stats && appState.stats.total > 0 && appState.currentFile && appState.currentFile.type === 'image' && appState.v2}
           {@const next1Idx = (appState.currentIndex + 1) % appState.stats.total}
           {@const next2Idx = (appState.currentIndex + 2) % appState.stats.total}
+          {@const prev1Idx = (appState.currentIndex - 1 + appState.stats.total) % appState.stats.total}
 
-          <img class="prefetch" src={appState.getFullUrl(next1Idx)} alt="prefetch-1" />
+          <img class="prefetch" src={appState.getFullUrl(next1Idx)} alt="prefetch-next-1" />
+          <img class="prefetch" src={appState.getFullUrl(prev1Idx)} alt="prefetch-prev-1" />
           {#if appState.stats.total > 2}
-            <img class="prefetch" src={appState.getFullUrl(next2Idx)} alt="prefetch-2" />
+            <img class="prefetch" src={appState.getFullUrl(next2Idx)} alt="prefetch-next-2" />
           {/if}
         {/if}
       {/if}
