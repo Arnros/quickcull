@@ -1,6 +1,8 @@
 package review
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"quickcull/internal/bus"
@@ -23,15 +25,15 @@ func TestSyncFullState_EmitsImmutableSnapshot(t *testing.T) {
 		},
 	}
 
-	var payload AppState
+	var payload AppStateDTO
 	var gotSync bool
 	srv.SetBroadcastHook(func(name string, data any) {
 		if name != "SyncState" {
 			return
 		}
-		state, ok := data.(AppState)
+		state, ok := data.(AppStateDTO)
 		if !ok {
-			t.Fatalf("SyncState payload type = %T, want AppState", data)
+			t.Fatalf("SyncState payload type = %T, want AppStateDTO", data)
 		}
 		// Capture ONLY the final authoritative state for this test.
 		// (SyncFullState emits multiple SyncStates during chunking).
@@ -66,13 +68,8 @@ func TestSyncFullState_EmitsImmutableSnapshot(t *testing.T) {
 		t.Fatalf("SyncState payload VisibleOrder changed to %q", payload.VisibleOrder[0])
 	}
 
-	// Verify that History and InitialState are NOT sent to UI (optimized payload)
-	if payload.History != nil {
-		t.Error("UI payload should NOT carry the History log")
-	}
-	if payload.InitialState != nil {
-		t.Error("UI payload should NOT carry the InitialState snapshot")
-	}
+	// UI payload does not carry History or InitialState at all since AppStateDTO doesn't export them.
+	// We just verify UndoLen.
 	if payload.UndoLen != 1 {
 		t.Errorf("Expected UndoLen 1, got %d", payload.UndoLen)
 	}
@@ -100,13 +97,7 @@ func TestSyncFullStateSnapshot_BuildSyncSnapshotDeepCopy(t *testing.T) {
 
 	snapshot := BuildSyncSnapshot(initial, true)
 
-	// Verify optimization: History/InitialState should be nil in UI snapshot
-	if snapshot.History != nil {
-		t.Error("Snapshot History should be nil")
-	}
-	if snapshot.InitialState != nil {
-		t.Error("Snapshot InitialState should be nil")
-	}
+	// Verify optimization: History/InitialState are excluded by DTO structure.
 	if snapshot.UndoLen != 1 {
 		t.Errorf("Expected UndoLen 1, got %d", snapshot.UndoLen)
 	}
@@ -122,5 +113,37 @@ func TestSyncFullStateSnapshot_BuildSyncSnapshotDeepCopy(t *testing.T) {
 	}
 	if snapshot.VisibleOrder[0] != "x.jpg" {
 		t.Fatalf("snapshot.VisibleOrder mutated, got %q", snapshot.VisibleOrder[0])
+	}
+}
+
+func TestAppStateDTO_JSONSerializationContract(t *testing.T) {
+	dto := AppStateDTO{
+		VisibleOrder: []string{"img1.jpg"},
+		TrashedCount: 5,
+		UndoLen:      3,
+		Photos: map[string]Photo{
+			"img1.jpg": {ID: "img1.jpg", IsStarred: true},
+		},
+	}
+
+	b, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatalf("Failed to marshal AppStateDTO: %v", err)
+	}
+	jsonStr := string(b)
+
+	// Verify exact keys expected by Svelte frontend
+	expectedKeys := []string{
+		`"VisibleOrder"`,
+		`"Photos"`,
+		`"TrashedCount"`,
+		`"undoLen"`, // explicitly lowercased via json tag
+		`"IsStarred"`,
+	}
+
+	for _, key := range expectedKeys {
+		if !strings.Contains(jsonStr, key) {
+			t.Errorf("JSON serialization missing expected key %s. Got: %s", key, jsonStr)
+		}
 	}
 }
