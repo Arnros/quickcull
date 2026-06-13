@@ -35,6 +35,8 @@ ui/playwright-report/
 phash.json
 thumbs/
 .trash/
+.cache/
+
 
 # Dependency directories
 vendor/
