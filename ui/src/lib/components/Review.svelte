@@ -15,53 +15,92 @@
   import { resolveShortcutContext } from "../shortcutContext";
 
   let mediaRetry = $state(0);
-  let imageDecoded = $state(false);
-  let leftImageDecoded = $state(false);
-  let rightImageDecoded = $state(false);
-
-  let lastIndex = $state(appState.currentIndex);
-  let direction = $state<'next' | 'prev'>('next');
-
-  $effect(() => {
-    const curr = appState.currentIndex;
-    if (curr !== lastIndex) {
-      const total = appState.stats?.total || 0;
-      const diff = curr - lastIndex;
-      if (total > 1) {
-        if (diff === -(total - 1)) {
-          direction = 'next';
-        } else if (diff === total - 1) {
-          direction = 'prev';
-        } else {
-          direction = diff > 0 ? 'next' : 'prev';
-        }
-      } else {
-        direction = diff > 0 ? 'next' : 'prev';
-      }
-      lastIndex = curr;
-    }
-  });
-
-  let slideOffset = $derived(direction === 'next' ? '12px' : '-12px');
+  let currentSrc = $state('');
+  let leftSrc = $state('');
+  let rightSrc = $state('');
 
   let mediaUrl = $derived(
     appState.currentFile
       ? `${appState.getFullUrl(appState.currentFile.index)}&tx=${appState.currentFile.txID}&r=${mediaRetry}`
       : ''
   );
+
   $effect(() => {
     // Reset retry counter when the selected file changes.
     appState.currentFile?.filename;
     mediaRetry = 0;
-    imageDecoded = false;
   });
+
   $effect(() => {
-    appState.comparisonIndex;
-    leftImageDecoded = false;
+    const targetUrl = mediaUrl;
+    if (targetUrl) {
+      const img = new Image();
+      img.src = targetUrl;
+      if (img.complete && img.naturalWidth > 0) {
+        currentSrc = targetUrl;
+      } else {
+        img.onload = () => {
+          if (targetUrl === mediaUrl) {
+            currentSrc = targetUrl;
+          }
+        };
+        img.onerror = () => {
+          if (targetUrl === mediaUrl) {
+            currentSrc = targetUrl;
+          }
+        };
+      }
+    } else {
+      currentSrc = '';
+    }
   });
+
   $effect(() => {
-    appState.currentIndex;
-    rightImageDecoded = false;
+    const targetUrl = appState.comparisonMode && appState.comparisonIndex !== -1 ? appState.getFullUrl(appState.comparisonIndex) : '';
+    if (targetUrl) {
+      const img = new Image();
+      img.src = targetUrl;
+      if (img.complete && img.naturalWidth > 0) {
+        leftSrc = targetUrl;
+      } else {
+        img.onload = () => {
+          if (targetUrl === appState.getFullUrl(appState.comparisonIndex)) {
+            leftSrc = targetUrl;
+          }
+        };
+        img.onerror = () => {
+          if (targetUrl === appState.getFullUrl(appState.comparisonIndex)) {
+            leftSrc = targetUrl;
+          }
+        };
+      }
+    } else {
+      leftSrc = '';
+    }
+  });
+
+  $effect(() => {
+    const targetUrl = appState.comparisonMode && appState.currentIndex !== -1 ? appState.getFullUrl(appState.currentIndex) : '';
+    if (targetUrl) {
+      const img = new Image();
+      img.src = targetUrl;
+      if (img.complete && img.naturalWidth > 0) {
+        rightSrc = targetUrl;
+      } else {
+        img.onload = () => {
+          if (targetUrl === appState.getFullUrl(appState.currentIndex)) {
+            rightSrc = targetUrl;
+          }
+        };
+        img.onerror = () => {
+          if (targetUrl === appState.getFullUrl(appState.currentIndex)) {
+            rightSrc = targetUrl;
+          }
+        };
+      }
+    } else {
+      rightSrc = '';
+    }
   });
   let shortcutCtx = $derived(resolveShortcutContext({
     view: appState.view,
@@ -137,12 +176,10 @@
             {/if}
             <div class="img-zoom-wrapper">
               <img
-                src={appState.getFullUrl(leftIdx)}
+                src={leftSrc}
                 alt="comparison-reference"
                 class="comparison-img"
-                class:loaded={leftImageDecoded}
-                style="--rot: {appState.referenceFile?.rotation || 0}deg; --slide-offset: 0px"
-                onload={() => leftImageDecoded = true}
+                style="--rot: {appState.referenceFile?.rotation || 0}deg"
               />
             </div>
             <div class="comparison-label">
@@ -164,12 +201,10 @@
             {/if}
             <div class="img-zoom-wrapper" class:zoom-cursor={!appState.zoomed}>
               <img
-                src={appState.getFullUrl(rightIdx)}
+                src={rightSrc}
                 alt="comparison-active"
                 class="comparison-img"
-                class:loaded={rightImageDecoded}
-                style="--rot: {appState.currentFile?.rotation || 0}deg; --slide-offset: {slideOffset}"
-                onload={() => rightImageDecoded = true}
+                style="--rot: {appState.currentFile?.rotation || 0}deg"
               />
             </div>
             <div class="comparison-label active">
@@ -196,11 +231,9 @@
                   class:zoom-cursor={!appState.zoomed}
                 >
                   <img
-                    src={mediaUrl}
+                    src={currentSrc}
                     alt={appState.currentFile.filename}
-                    class:loaded={imageDecoded}
-                    style="--rot: {appState.currentFile.rotation}deg; --slide-offset: {slideOffset}"
-                    onload={() => imageDecoded = true}
+                    style="--rot: {appState.currentFile.rotation}deg"
                     onerror={() => {
                       if (mediaRetry < 1) {
                         mediaRetry += 1;
@@ -466,17 +499,11 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
-    opacity: 0;
-    transform: translate3d(var(--slide-offset, 0px), 0, 0) rotate(var(--rot, 0deg));
-    transition: opacity 120ms cubic-bezier(0.16, 1, 0.3, 1), transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+    transform: rotate(var(--rot, 0deg));
     /* Trigger GPU acceleration */
-    will-change: transform, opacity;
+    will-change: transform;
     backface-visibility: hidden;
     transform-style: preserve-3d;
-  }
-  .loaded {
-    opacity: 1 !important;
-    transform: translate3d(0, 0, 0) rotate(var(--rot, 0deg)) !important;
   }
 
   .viewer.zoomed .main-pane:not(.comparison-mode) img,
