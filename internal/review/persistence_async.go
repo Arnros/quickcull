@@ -12,7 +12,7 @@ import (
 const persistenceDebounce = 75 * time.Millisecond
 
 type asyncMetadataWriter struct {
-	store metadataPersistence
+	store persistence.StateStore
 
 	mu             sync.Mutex
 	pendingSingle  map[string]map[string]persistence.PhotoMetadata
@@ -25,7 +25,7 @@ type asyncMetadataWriter struct {
 	doneCh   chan struct{}
 }
 
-func newAsyncMetadataWriter(store metadataPersistence) *asyncMetadataWriter {
+func newAsyncMetadataWriter(store persistence.StateStore) *asyncMetadataWriter {
 	w := &asyncMetadataWriter{
 		store:          store,
 		pendingSingle:  make(map[string]map[string]persistence.PhotoMetadata),

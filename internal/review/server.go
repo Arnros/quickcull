@@ -20,20 +20,6 @@ type burstResult struct {
 	index int
 }
 
-type metadataPersistence interface {
-	Close() error
-	LoadFolderMetadata(folderID string) (map[string]persistence.PhotoMetadata, error)
-	LoadHistory(folderID string) ([]byte, error)
-	GetFolderInfo(folderID string) (persistence.FolderInfo, bool)
-	SaveFolderInfo(folderID string, info persistence.FolderInfo) error
-	SaveFolderSnapshot(folderID string, snap persistence.FolderSnapshot) error
-	GetFolderSnapshot(folderID string) (persistence.FolderSnapshot, bool)
-	SaveFolderMetadata(folderID string, metadata map[string]persistence.PhotoMetadata) error
-	SavePhotoMetadata(folderID, photoID string, meta persistence.PhotoMetadata) error
-	RemovePhotoMetadata(folderID, photoID string) error
-	SaveHistory(folderID string, history []byte) error
-}
-
 // Server is the core logic provider.
 //
 // Lock ordering (always acquire in this order to prevent deadlocks):
@@ -72,7 +58,7 @@ type Server struct {
 
 	persistMu      sync.Mutex
 	persistAsync   *asyncMetadataWriter
-	persistence    metadataPersistence
+	persistence    persistence.StateStore
 	lastUIActivity atomic.Int64 // UnixNano timestamp of last thumbnail request
 
 	exportCancel context.CancelFunc
