@@ -38,7 +38,7 @@ func writeTestJPEG(t *testing.T, root, rel string) {
 	}
 }
 
-func newLoadStatePersistenceTestServer(t *testing.T) (*Server, *persistence.MetadataStore) {
+func newLoadStatePersistenceTestServer(t *testing.T) (*Server, persistence.StateStore) {
 	t.Helper()
 
 	store, err := persistence.NewMetadataStore(filepath.Join(t.TempDir(), "metadata.db"))

@@ -113,7 +113,11 @@ func (s *Server) NextTxID() uint64 {
 // InitPersistence initializes the metadata database.
 func (s *Server) InitPersistence() error {
 	dbPath := filepath.Join(domain.GetAppCacheDir(), "metadata.db")
-	store, err := persistence.NewMetadataStore(dbPath)
+	var store persistence.StateStore
+	var err error
+	if dbPath != "" {
+		store, err = persistence.NewMetadataStore(dbPath)
+	}
 	if err != nil {
 		return err
 	}

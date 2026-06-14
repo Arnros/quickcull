@@ -10,6 +10,22 @@ import (
 	"go.etcd.io/bbolt"
 )
 
+// StateStore is the interface for persistence operations.
+type StateStore interface {
+	Close() error
+	ClearMetadataScope(folderID, scope string) error
+	LoadFolderMetadata(folderID string) (map[string]PhotoMetadata, error)
+	SavePhotoMetadata(folderID, photoID string, meta PhotoMetadata) error
+	RemovePhotoMetadata(folderID, photoID string) error
+	SaveFolderMetadata(folderID string, metadata map[string]PhotoMetadata) error
+	SaveHistory(folderID string, history []byte) error
+	LoadHistory(folderID string) ([]byte, error)
+	GetFolderInfo(folderID string) (FolderInfo, bool)
+	SaveFolderInfo(folderID string, info FolderInfo) error
+	GetFolderSnapshot(folderID string) (FolderSnapshot, bool)
+	SaveFolderSnapshot(folderID string, snap FolderSnapshot) error
+}
+
 // MetadataStore handles centralized storage using BoltDB
 type MetadataStore struct {
 	db *bbolt.DB
@@ -22,7 +38,7 @@ const (
 )
 
 // NewMetadataStore initializes the database at the given path.
-func NewMetadataStore(dbPath string) (*MetadataStore, error) {
+func NewMetadataStore(dbPath string) (StateStore, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, err
 	}

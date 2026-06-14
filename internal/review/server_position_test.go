@@ -9,7 +9,7 @@ import (
 	"quickcull/internal/persistence"
 )
 
-func newServerWithPersistenceForPositionTests(t *testing.T, root string, files []string) (*Server, *persistence.MetadataStore) {
+func newServerWithPersistenceForPositionTests(t *testing.T, root string, files []string) (*Server, persistence.StateStore) {
 	t.Helper()
 
 	store, err := persistence.NewMetadataStore(filepath.Join(t.TempDir(), "metadata.db"))

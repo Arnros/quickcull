@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func newTestStore(t *testing.T) *MetadataStore {
+func newTestStore(t *testing.T) StateStore {
 	t.Helper()
 	store, err := NewMetadataStore(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
