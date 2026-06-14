@@ -43,7 +43,7 @@ func TestSyncLargeLibraryProtocol(t *testing.T) {
 		events = append(events, name)
 		if name == eventSyncState {
 			syncCount++
-			if state, ok := data.(AppState); ok {
+			if state, ok := data.(AppStateDTO); ok {
 				finalPhotos = state.Photos
 			}
 		}
@@ -122,7 +122,7 @@ func TestSyncSmallLibraryProtocol(t *testing.T) {
 
 	srv.SetBroadcastHook(func(name string, data any) {
 		if name == eventSyncState {
-			if state, ok := data.(AppState); ok {
+			if state, ok := data.(AppStateDTO); ok {
 				mu.Lock()
 				finalPhotos = state.Photos
 				mu.Unlock()
@@ -213,7 +213,7 @@ func TestSyncStructuralUpdateProtocol(t *testing.T) {
 
 	srv.SetBroadcastHook(func(name string, data any) {
 		if name == eventSyncState {
-			if state, ok := data.(AppState); ok {
+			if state, ok := data.(AppStateDTO); ok {
 				mu.Lock()
 				isPartial = state.IsPartial
 				photoMap = state.Photos

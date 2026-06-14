@@ -145,13 +145,13 @@ func TestLoadState_SnapshotDisabled_UsesLegacyFullScanFlow(t *testing.T) {
 		return nil
 	})
 
-	firstSyncState := make(chan AppState, 1)
+	firstSyncState := make(chan AppStateDTO, 1)
 	var once sync.Once
 	srv.SetBroadcastHook(func(name string, data any) {
 		if name != eventSyncState {
 			return
 		}
-		state, ok := data.(AppState)
+		state, ok := data.(AppStateDTO)
 		if !ok {
 			return
 		}

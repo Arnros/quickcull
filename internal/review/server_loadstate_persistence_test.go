@@ -247,13 +247,13 @@ func TestLoadState_UsesPersistedSnapshotForImmediateVisibleOrder(t *testing.T) {
 		return nil
 	})
 
-	firstSyncState := make(chan AppState, 1)
+	firstSyncState := make(chan AppStateDTO, 1)
 	var once sync.Once
 	srv.SetBroadcastHook(func(name string, data any) {
 		if name != eventSyncState {
 			return
 		}
-		state, ok := data.(AppState)
+		state, ok := data.(AppStateDTO)
 		if !ok {
 			return
 		}
@@ -267,7 +267,7 @@ func TestLoadState_UsesPersistedSnapshotForImmediateVisibleOrder(t *testing.T) {
 		loadErr <- srv.LoadState(root)
 	}()
 
-	var gotFirst AppState
+	var gotFirst AppStateDTO
 	select {
 	case gotFirst = <-firstSyncState:
 	case <-time.After(2 * time.Second):
@@ -317,13 +317,13 @@ func TestLoadState_FallsBackWhenSnapshotInvalid(t *testing.T) {
 		return nil
 	})
 
-	firstSyncState := make(chan AppState, 1)
+	firstSyncState := make(chan AppStateDTO, 1)
 	var once sync.Once
 	srv.SetBroadcastHook(func(name string, data any) {
 		if name != eventSyncState {
 			return
 		}
-		state, ok := data.(AppState)
+		state, ok := data.(AppStateDTO)
 		if !ok {
 			return
 		}
@@ -337,7 +337,7 @@ func TestLoadState_FallsBackWhenSnapshotInvalid(t *testing.T) {
 		loadErr <- srv.LoadState(root)
 	}()
 
-	var gotFirst AppState
+	var gotFirst AppStateDTO
 	select {
 	case gotFirst = <-firstSyncState:
 	case <-time.After(2 * time.Second):

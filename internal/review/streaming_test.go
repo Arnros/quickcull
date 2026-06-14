@@ -244,12 +244,12 @@ func TestLoadState_EmitsExpectedSequenceWhenSnapshotHit(t *testing.T) {
 
 	type syncEvent struct {
 		name  string
-		state AppState
+		state AppStateDTO
 	}
 	var names []string
 	var syncEvents []syncEvent
 	var mu sync.Mutex
-	firstSync := make(chan AppState, 1)
+	firstSync := make(chan AppStateDTO, 1)
 	var once sync.Once
 	srv.SetBroadcastHook(func(name string, data any) {
 		mu.Lock()
@@ -258,7 +258,7 @@ func TestLoadState_EmitsExpectedSequenceWhenSnapshotHit(t *testing.T) {
 		if name != eventSyncState {
 			return
 		}
-		state, ok := data.(AppState)
+		state, ok := data.(AppStateDTO)
 		if !ok {
 			return
 		}
@@ -275,7 +275,7 @@ func TestLoadState_EmitsExpectedSequenceWhenSnapshotHit(t *testing.T) {
 		loadErr <- srv.LoadState(root)
 	}()
 
-	var first AppState
+	var first AppStateDTO
 	select {
 	case first = <-firstSync:
 	case <-time.After(2 * time.Second):
