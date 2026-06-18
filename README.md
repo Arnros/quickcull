@@ -108,7 +108,7 @@ wails build -tags webkit2gtk_4_1 -ldflags "-s -w"
 - [User Guide](docs/usage.md): Full walkthrough of features and workflows.
 - [Architecture](docs/architecture.md): Deep dive into the modular engine.
 - [Benchmarks](docs/benchmarks.md): Speed results on massive datasets.
-- [Development Mandates](GEMINI.md): Project engineering standards.
+- [Development Mandates](CLAUDE.md): Project engineering standards.
 
 ## 📄 License
 
