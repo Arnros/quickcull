@@ -138,9 +138,12 @@ class SyncService {
         // Final metadata sync for current file
         if (appState.currentFile && appState.v2.Photos[appState.currentFile.filename]) {
           const p = appState.v2.Photos[appState.currentFile.filename];
-          appState.currentFile.starred = p.IsStarred;
-          appState.currentFile.label = p.Label;
-          appState.currentFile.rotation = p.Rotation;
+          appState.currentFile = {
+            ...appState.currentFile,
+            starred: p.IsStarred,
+            label: p.Label,
+            rotation: p.Rotation,
+          } as review.FileResponse;
         }
       }
     });
@@ -188,9 +191,12 @@ class SyncService {
       const photos = appState.v2.Photos;
       if (appState.currentFile && photos[appState.currentFile.filename]) {
         const p = photos[appState.currentFile.filename];
-        appState.currentFile.starred = p.IsStarred;
-        appState.currentFile.label = p.Label;
-        appState.currentFile.rotation = p.Rotation;
+        appState.currentFile = {
+          ...appState.currentFile,
+          starred: p.IsStarred,
+          label: p.Label,
+          rotation: p.Rotation,
+        } as review.FileResponse;
       }
 
       // If the order changed (e.g. Sort), try to maintain current photo selection
@@ -200,7 +206,9 @@ class SyncService {
         if (newIndex !== -1 && newIndex !== appState.currentIndex) {
           logger.debug('Maintaining current photo at new index', { oldIndex: appState.currentIndex, newIndex });
           appState.currentIndex = newIndex;
-          if (appState.currentFile) appState.currentFile.index = newIndex;
+          if (appState.currentFile) {
+            appState.currentFile = { ...appState.currentFile, index: newIndex } as review.FileResponse;
+          }
         }
       }
       appState.selectionPivot = remapIndexByPath(
@@ -239,11 +247,16 @@ class SyncService {
           appState.updateStarredIndices();
         }
 
-        // Re-sync current file if it's the one that changed
+        // Re-sync current file if it's the one that changed.
+        // Create a new object to reliably trigger $state reactivity through
+        // the getter chain (AppState.currentFile → NavigationService.currentFile).
         if (appState.currentFile && appState.currentFile.filename === photoID) {
-          if (changes.IsStarred !== undefined) appState.currentFile.starred = changes.IsStarred;
-          if (changes.Label !== undefined) appState.currentFile.label = changes.Label;
-          if (changes.Rotation !== undefined) appState.currentFile.rotation = changes.Rotation;
+          let changed = false;
+          const updated = { ...appState.currentFile };
+          if (changes.IsStarred !== undefined) { updated.starred = changes.IsStarred; changed = true; }
+          if (changes.Label !== undefined) { updated.label = changes.Label; changed = true; }
+          if (changes.Rotation !== undefined) { updated.rotation = changes.Rotation; changed = true; }
+          if (changed) appState.currentFile = updated as review.FileResponse;
         }
       }
     });
