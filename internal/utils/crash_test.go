@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"bytes"
 	"log/slog"
 	"strings"
 	"sync"
@@ -10,12 +9,12 @@ import (
 )
 
 type syncBuffer struct {
+	buf       strings.Builder
 	mu        sync.Mutex
-	buf       bytes.Buffer
 	syncCalls int
 }
 
-func (b *syncBuffer) Write(p []byte) (int, error) {
+func (b *syncBuffer) Write(p []byte) (n int, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.Write(p)
@@ -36,12 +35,10 @@ func (b *syncBuffer) String() string {
 
 func TestHandlePanicWritesCrashSinkAndSyncs(t *testing.T) {
 	oldSink := crashSink.Load()
-	oldExit := crashExit
 	oldNotify := crashNotify
 	oldLogger := slog.Default()
 	t.Cleanup(func() {
 		crashSink.Store(oldSink)
-		crashExit = oldExit
 		crashNotify = oldNotify
 		slog.SetDefault(oldLogger)
 	})
@@ -50,11 +47,6 @@ func TestHandlePanicWritesCrashSinkAndSyncs(t *testing.T) {
 	crashOut := &syncBuffer{}
 	slog.SetDefault(slog.New(slog.NewTextHandler(logOut, nil)))
 	crashSink.Store(newCrashSink(crashOut))
-
-	exitCode := make(chan int, 1)
-	crashExit = func(code int) {
-		exitCode <- code
-	}
 
 	notifyMsg := make(chan string, 1)
 	crashNotify = func(content string) {
@@ -66,14 +58,8 @@ func TestHandlePanicWritesCrashSinkAndSyncs(t *testing.T) {
 		panic("boom")
 	}()
 
-	select {
-	case code := <-exitCode:
-		if code != 1 {
-			t.Fatalf("crashExit code = %d, want 1", code)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("crashExit was not called")
-	}
+	// HandlePanic recovers, logs, and notifies but does NOT exit.
+	// Exit is reserved for HandlePanicFatal.
 
 	select {
 	case msg := <-notifyMsg:
@@ -98,7 +84,7 @@ func TestHandlePanicWritesCrashSinkAndSyncs(t *testing.T) {
 	}
 }
 
-func TestSafeGoRecoversPanics(t *testing.T) {
+func TestHandlePanicFatalExits(t *testing.T) {
 	oldSink := crashSink.Load()
 	oldExit := crashExit
 	oldNotify := crashNotify
@@ -112,20 +98,54 @@ func TestSafeGoRecoversPanics(t *testing.T) {
 	crashSink.Store(newCrashSink(crashOut))
 	crashNotify = func(string) {}
 
-	done := make(chan int, 1)
+	exitCode := make(chan int, 1)
 	crashExit = func(code int) {
-		done <- code
+		exitCode <- code
+	}
+
+	func() {
+		defer HandlePanicFatal()
+		panic("fatal boom")
+	}()
+
+	select {
+	case code := <-exitCode:
+		if code != 1 {
+			t.Fatalf("crashExit code = %d, want 1", code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("crashExit was not called")
+	}
+
+	if got := crashOut.String(); !strings.Contains(got, "CRITICAL PANIC DETECTED") {
+		t.Fatalf("crash sink output = %q, want panic header", got)
+	}
+}
+
+func TestSafeGoRecoversPanics(t *testing.T) {
+	oldSink := crashSink.Load()
+	oldNotify := crashNotify
+	t.Cleanup(func() {
+		crashSink.Store(oldSink)
+		crashNotify = oldNotify
+	})
+
+	crashOut := &syncBuffer{}
+	crashSink.Store(newCrashSink(crashOut))
+
+	recovered := make(chan struct{}, 1)
+	crashNotify = func(string) {
+		recovered <- struct{}{}
 	}
 
 	SafeGo(func() {
 		panic("goroutine boom")
 	})
 
+	// SafeGo uses HandlePanic (no exit). Wait for crashNotify to confirm recovery.
 	select {
-	case code := <-done:
-		if code != 1 {
-			t.Fatalf("crashExit code = %d, want 1", code)
-		}
+	case <-recovered:
+		// goroutine recovered and notified
 	case <-time.After(time.Second):
 		t.Fatal("panic in SafeGo was not recovered")
 	}

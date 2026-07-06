@@ -8,7 +8,21 @@ import (
 )
 
 func (s *Server) applyEvent(ev bus.Event) (bool, bus.Event, error) {
-	state := s.getState()
+	// Snapshot physical state data BEFORE acquiring appStateMu to avoid lock
+	// inversion with RefreshVisibleOrder (state.mu → appStateMu).
+	// Also re-acquires state fresh to avoid stale pointer (was captured too early).
+	isStruct := isStructuralChange(ev)
+	var filesSnapshot []string
+
+	if isStruct {
+		state := s.getState()
+		if state != nil {
+			state.mu.RLock()
+			filesSnapshot = make([]string, len(state.files))
+			copy(filesSnapshot, state.files)
+			state.mu.RUnlock()
+		}
+	}
 
 	s.appStateMu.Lock()
 
@@ -31,13 +45,18 @@ func (s *Server) applyEvent(ev bus.Event) (bool, bus.Event, error) {
 		return false, bus.Event{}, domain.ErrNothingToUndo
 	}
 
-	// 2. Synchronize physical file system state (legacy State) if needed.
-	// This might update nextState.VisibleOrder.
-	s.syncPhysicalState(ev, appliedEvent, nextState, state)
+	// 2. For structural changes, re-sync VisibleOrder from the physical state snapshot.
+	if isStruct && len(filesSnapshot) > 0 {
+		nextState.VisibleOrder = filesSnapshot
+	}
 
 	// 3. Commit the new state pointer
 	s.appState = nextState
 	s.appStateMu.Unlock()
+
+	// Execute physical undo restores OUTSIDE appStateMu to avoid deadlock
+	// with RefreshVisibleOrder. RestoreFromTrashAt internally acquires state.mu.Lock().
+	s.undoPhysicalRestores(ev, appliedEvent)
 
 	// Persist changes outside the lock.
 	s.persistStateChanges(ev, nextState)
@@ -64,7 +83,7 @@ func (s *Server) applyEvent(ev bus.Event) (bool, bus.Event, error) {
 	// INTELLIGENT BROADCAST:
 	// If it's a simple metadata change, send a DELTA to the UI to save bandwidth.
 	// If it's a structural change (Undo, Trash), send the FULL state to ensure consistency.
-	if !isStructuralChange(ev) {
+	if !isStruct {
 		if s.broadcastDelta(appliedEvent, *nextState) {
 			return true, appliedEvent, nil
 		}
@@ -73,54 +92,49 @@ func (s *Server) applyEvent(ev bus.Event) (bool, bus.Event, error) {
 	// For structural changes, send SyncState with IsPartial=true and include only affected photos
 	affected := affectedPhotosFromEvent(appliedEvent)
 	s.broadcastAppStateSelective(nextState, true, affected)
-	
+
 	return true, appliedEvent, nil
 }
 
-// syncPhysicalState reconciles the physical filesystem with the new reducer state.
-// Must be called with appStateMu held for write.
-func (s *Server) syncPhysicalState(ev bus.Event, appliedEvent bus.Event, nextState *AppState, state *State) {
+// undoPhysicalRestores restores trashed files for undo operations.
+// Must be called outside appStateMu because RestoreFromTrashAt
+// internally acquires state.mu.Lock(), which must always be acquired
+// before appStateMu (consistent with RefreshVisibleOrder).
+func (s *Server) undoPhysicalRestores(ev bus.Event, appliedEvent bus.Event) {
+	_, isUndo := ev.Payload.(bus.CommandUndoPayload)
+	if !isUndo {
+		return
+	}
+
+	state := s.getState()
 	if state == nil {
 		return
 	}
 
-	_, isUndo := ev.Payload.(bus.CommandUndoPayload)
-	if isUndo {
-		switch p := appliedEvent.Payload.(type) {
-		case bus.CommandTrashPhotoPayload:
-			utils.LogCore("Undo: Restoring file from trash", "photo", p.PhotoID, "originalIndex", p.OriginalIndex)
-			if err := state.RestoreFromTrashAt(p.PhotoID, p.OriginalIndex); err != nil {
-				utils.LogWarn("Undo: RestoreFromTrashAt failed", "photo", p.PhotoID, "error", err)
-			}
-		case bus.CommandBatchPayload:
-			type pendingRestore struct {
-				photoID string
-				idx     int
-			}
-			var toRestore []pendingRestore
-			for _, subEvent := range p.Events {
-				if trashPayload, ok := subEvent.Payload.(bus.CommandTrashPhotoPayload); ok {
-					toRestore = append(toRestore, pendingRestore{trashPayload.PhotoID, trashPayload.OriginalIndex})
-				}
-			}
-			sort.Slice(toRestore, func(i, j int) bool { return toRestore[i].idx < toRestore[j].idx })
-			for _, r := range toRestore {
-				utils.LogCore("Undo: Restoring file from trash (batch)", "photo", r.photoID, "originalIndex", r.idx)
-				if err := state.RestoreFromTrashAt(r.photoID, r.idx); err != nil {
-					utils.LogWarn("Undo: RestoreFromTrashAt failed", "photo", r.photoID, "error", err)
-				}
+	switch p := appliedEvent.Payload.(type) {
+	case bus.CommandTrashPhotoPayload:
+		utils.LogCore("Undo: Restoring file from trash", "photo", p.PhotoID, "originalIndex", p.OriginalIndex)
+		if err := state.RestoreFromTrashAt(p.PhotoID, p.OriginalIndex); err != nil {
+			utils.LogWarn("Undo: RestoreFromTrashAt failed", "photo", p.PhotoID, "error", err)
+		}
+	case bus.CommandBatchPayload:
+		type restore struct {
+			photoID string
+			idx     int
+		}
+		var toRestore []restore
+		for _, subEvent := range p.Events {
+			if trashPayload, ok := subEvent.Payload.(bus.CommandTrashPhotoPayload); ok {
+				toRestore = append(toRestore, restore{trashPayload.PhotoID, trashPayload.OriginalIndex})
 			}
 		}
-	}
-
-	// FOR STRUCTURAL CHANGES (Trash, Undo), re-sync VisibleOrder from the physical state
-	if isStructuralChange(ev) {
-		state.mu.RLock()
-		newOrder := make([]string, len(state.files))
-		copy(newOrder, state.files)
-		state.mu.RUnlock()
-		nextState.VisibleOrder = newOrder
-		s.appState = nextState
+		sort.Slice(toRestore, func(i, j int) bool { return toRestore[i].idx < toRestore[j].idx })
+		for _, r := range toRestore {
+			utils.LogCore("Undo: Restoring file from trash (batch)", "photo", r.photoID, "originalIndex", r.idx)
+			if err := state.RestoreFromTrashAt(r.photoID, r.idx); err != nil {
+				utils.LogWarn("Undo: RestoreFromTrashAt failed", "photo", r.photoID, "error", err)
+			}
+		}
 	}
 }
 

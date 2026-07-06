@@ -82,7 +82,17 @@ func reportPanic(r any) {
 
 // HandlePanic captures a panic, logs it with a stack trace, and performs
 // platform-specific notification if necessary.
+// For Wails-bound API handlers: recovers the goroutine gracefully so the
+// frontend receives an error instead of the whole app crashing.
 func HandlePanic() {
+	if r := recover(); r != nil {
+		reportPanic(r)
+	}
+}
+
+// HandlePanicFatal captures a panic, logs it, and terminates the process.
+// Use only for truly unrecoverable scenarios (init-time failures, main goroutine).
+func HandlePanicFatal() {
 	if r := recover(); r != nil {
 		reportPanic(r)
 		crashExit(1)

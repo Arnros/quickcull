@@ -1044,6 +1044,7 @@ func (a *App) SavePosition(index int) {
 
 // Quit closes the app
 func (a *App) Quit() {
+	utils.StopFlusher()
 	exif.Cleanup()
 	wailsruntime.Quit(a.ctx)
 }

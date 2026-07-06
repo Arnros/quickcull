@@ -73,6 +73,14 @@ const placeholderJPEGQuality = 50
 
 // ServeFile serves a file with optional content-type.
 func (s *Server) ServeFile(w http.ResponseWriter, r *http.Request, path string, contentType string) {
+	// Defense in depth: reject paths with directory traversal patterns.
+	// Callers are expected to sanitize, but this guards against regressions.
+	cleaned := filepath.Clean(path)
+	if strings.Contains(cleaned, "..") {
+		slog.Error("ServeFile: path traversal rejected", "path", path)
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		return
+	}
 	slog.Debug("ServeFile: starting", "path", path, "range", r.Header.Get("Range"))
 	f, err := os.Open(path) // #nosec G304 -- path is resolved and sanitized before ServeFile call.
 	if err != nil {

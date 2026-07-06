@@ -75,18 +75,19 @@ func (s *Server) recordViewReadySample(latency int64) {
 
 func (s *Server) viewReadyP50() int64 {
 	s.viewReadyMu.Lock()
-	defer s.viewReadyMu.Unlock()
 	if s.viewReadyCount == 0 {
+		s.viewReadyMu.Unlock()
 		return 0
 	}
-	var cp [viewReadySampleWindow]int64
-	for i := 0; i < s.viewReadyCount; i++ {
-		idx := (s.viewReadyWrite - s.viewReadyCount + i + viewReadySampleWindow) % viewReadySampleWindow
+	count := s.viewReadyCount
+	cp := make([]int64, count)
+	for i := 0; i < count; i++ {
+		idx := (s.viewReadyWrite - count + i + viewReadySampleWindow) % viewReadySampleWindow
 		cp[i] = s.viewReadySamples[idx]
 	}
-	sorted := cp[:s.viewReadyCount]
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-	return sorted[len(sorted)/2]
+	s.viewReadyMu.Unlock()
+	sort.Slice(cp, func(i, j int) bool { return cp[i] < cp[j] })
+	return cp[len(cp)/2]
 }
 
 func (s *Server) schedulerModeDurationsSnapshot() (activeMs int64, idleMs int64) {

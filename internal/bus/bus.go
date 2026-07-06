@@ -3,7 +3,6 @@ package bus
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"sync"
 )
 
@@ -138,8 +137,9 @@ type CommandLabelPhotoPayload struct {
 
 // CommandRotatePhotoPayload is the payload for TypeCommandRotatePhoto
 type CommandRotatePhotoPayload struct {
-	PhotoID   string
-	Direction string // "left" or "right"
+	PhotoID     string
+	Direction   string // "left", "right", or "reset"
+	OldRotation int    // previous rotation for exact undo
 }
 
 // CommandBatchPayload wraps multiple events as a single undo-able unit.
@@ -167,6 +167,7 @@ type StateUpdatedPayload struct {
 type Bus struct {
 	mu          sync.RWMutex
 	subscribers map[EventType][]chan Event
+	dropped     sync.Map // map[EventType]int64 — dropped event counters
 }
 
 // New creates a new Event Bus.
@@ -196,12 +197,29 @@ func (b *Bus) Publish(e Event) {
 
 	if channels, ok := b.subscribers[e.Type]; ok {
 		for _, ch := range channels {
-			// Non-blocking send, drop if full (or use a large buffer)
 			select {
 			case ch <- e:
 			default:
-				slog.Warn("bus: subscriber channel full, event dropped", "type", e.Type)
+				// Channel full: track drop count for diagnostics.
+				val, _ := b.dropped.LoadOrStore(e.Type, int64(0))
+				b.dropped.Store(e.Type, val.(int64)+1)
 			}
 		}
 	}
+}
+
+// DroppedEvents returns the number of events dropped per type since the
+// last call. Calling this method resets the counters.
+func (b *Bus) DroppedEvents() map[EventType]int64 {
+	result := make(map[EventType]int64)
+	b.dropped.Range(func(key, value any) bool {
+		t, tok := key.(EventType)
+		n, nok := value.(int64)
+		if tok && nok && n > 0 {
+			result[t] = n
+			b.dropped.Store(key, int64(0))
+		}
+		return true
+	})
+	return result
 }

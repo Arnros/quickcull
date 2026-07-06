@@ -27,6 +27,9 @@ var (
 	LevelNavigation = slog.LevelDebug
 	LevelAnalysis   = slog.LevelInfo
 	LevelCore       = slog.LevelInfo
+
+	// stopFlusher cancels the background log-flush goroutine.
+	stopFlusher context.CancelFunc
 )
 
 // LogNav logs a navigation-related message (high frequency)
@@ -113,13 +116,23 @@ func SetupGlobalLogging(debugMode bool, logPath string) {
 	// Set crash output to include the log file
 	SetCrashOutputs(os.Stderr, logBuffer)
 
-	// Background flusher
-	go func() {
+	// Background flusher: runs periodically until the app shuts down.
+	// Cancelled by StopLogFlusher during cleanup.
+	flushCtx, cancel := context.WithCancel(context.Background())
+	stopFlusher = cancel
+	SafeGo(func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
 		for {
-			time.Sleep(2 * time.Second)
-			FlushLogs()
+			select {
+			case <-flushCtx.Done():
+				FlushLogs()
+				return
+			case <-ticker.C:
+				FlushLogs()
+			}
 		}
-	}()
+	})
 
 	slog.Info("Logging initialized", "path", logPath, "level", LogLevel.Level())
 }
@@ -134,6 +147,16 @@ func FlushLogs() {
 	if logFile != nil {
 		_ = logFile.Sync()
 	}
+}
+
+// StopFlusher cancels the background log-flush goroutine and performs
+// a final flush. Safe to call multiple times.
+func StopFlusher() {
+	if stopFlusher != nil {
+		stopFlusher()
+		stopFlusher = nil
+	}
+	FlushLogs()
 }
 
 func rotateLog(path string) {
