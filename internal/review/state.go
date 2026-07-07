@@ -164,54 +164,81 @@ func (s *State) Root() string { return s.root }
 func (s *State) CacheDir() string { return s.cacheDir }
 
 // Trash moves the file at index to the .trash/ subdirectory and removes it from
-// the active file list.
+// the active file list. Filesystem I/O is performed outside the state lock to
+// avoid blocking navigation/search/analysis during large batch operations.
 func (s *State) Trash(index int) (int, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if index < 0 || index >= len(s.files) {
-		return len(s.files), domain.ErrIndexOutOfBounds
+		s.mu.Unlock()
+		return 0, domain.ErrIndexOutOfBounds
 	}
 	relPath := s.files[index]
-	if err := s.trashFileLocked(relPath); err != nil {
-		return len(s.files), err
+	root := s.root
+	s.mu.Unlock()
+
+	if err := trashFile(root, relPath); err != nil {
+		return s.Len(), err
 	}
+
+	s.mu.Lock()
 	s.stateRemove(relPath)
-	return len(s.files), nil
+	count := len(s.files)
+	s.mu.Unlock()
+	return count, nil
 }
 
-// TrashMultiplePaths moves multiple files to .trash/ efficiently.
+// TrashMultiplePaths moves multiple files to .trash/ efficiently. Filesystem
+// I/O is performed outside the state lock so navigation stays responsive even
+// on slow/networked volumes or large batches.
 func (s *State) TrashMultiplePaths(paths []string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Snapshot which paths are currently tracked.
+	s.mu.RLock()
+	root := s.root
+	tracked := make([]string, 0, len(paths))
 	for _, relPath := range paths {
-		if s.findIndexLocked(relPath) < 0 {
-			continue
+		if s.findIndexLocked(relPath) >= 0 {
+			tracked = append(tracked, relPath)
 		}
-		if err := s.trashFileLocked(relPath); err != nil {
+	}
+	s.mu.RUnlock()
+
+	for _, relPath := range tracked {
+		if err := trashFile(root, relPath); err != nil {
 			slog.Warn("TrashMultiplePaths: failed to move file to trash", "path", relPath, "err", err)
 			continue
 		}
+		s.mu.Lock()
 		s.stateRemove(relPath)
+		s.mu.Unlock()
 	}
-	return len(s.files), nil
+
+	s.mu.RLock()
+	count := len(s.files)
+	s.mu.RUnlock()
+	return count, nil
 }
 
-// trashFileLocked performs the physical move of relPath into .trash/.
-// Must be called with mu held for writing.
-func (s *State) trashFileLocked(relPath string) error {
-	srcPath := filepath.Join(s.root, relPath)
-	trashPath := filepath.Join(s.root, domain.DirTrash, relPath)
+// trashFile performs the physical move of relPath into .trash/.
+// Must be called WITHOUT s.mu held (filesystem I/O is blocking).
+func trashFile(root, relPath string) error {
+	srcPath := filepath.Join(root, relPath)
+	trashPath := filepath.Join(root, domain.DirTrash, relPath)
 	if err := os.MkdirAll(filepath.Dir(trashPath), dirPerm); err != nil {
-		slog.Warn("trashFileLocked: could not create trash directory", "path", filepath.Dir(trashPath), "err", err)
+		slog.Warn("trashFile: could not create trash directory", "path", filepath.Dir(trashPath), "err", err)
 		return domain.ErrTrashDirCreate
 	}
 	if err := os.Rename(srcPath, trashPath); err != nil {
 		if copyErr := utils.CopyFile(srcPath, trashPath); copyErr != nil {
-			slog.Warn("trashFileLocked: copy fallback failed", "path", relPath, "err", copyErr)
+			slog.Warn("trashFile: copy fallback failed", "path", relPath, "err", copyErr)
 			return domain.ErrTrashCopyFailed
 		}
 		if removeErr := utils.RemoveFile(srcPath); removeErr != nil {
-			slog.Warn("trashFileLocked: could not remove source after copy", "path", srcPath, "err", removeErr)
+			// Source still present alongside the trash copy: do not mark the
+			// entry as trashed in the active state, otherwise the photo would
+			// silently appear in two places (active + trash).
+			slog.Warn("trashFile: copy succeeded but source removal failed",
+				"path", srcPath, "err", removeErr, "trashPath", trashPath)
+			return domain.ErrTrashCopyFailed
 		}
 	}
 	return nil
@@ -249,12 +276,20 @@ func (s *State) UpdateFiles(newFiles []string) int {
 
 // SortByDate reorders files by their EXIF capture date, falling back to mtime.
 // Date resolution is parallelised across a fraction of available CPUs.
+// Filesystem I/O (stat) and cache lookups happen OUTSIDE the state lock to keep
+// navigation responsive; only the final commit acquires the write lock.
 func (s *State) SortByDate(cache *MediaCache) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Snapshot files + root under a short read lock.
+	s.mu.RLock()
+	root := s.root
 	if len(s.files) <= 1 {
+		s.mu.RUnlock()
 		return
 	}
+	files := make([]string, len(s.files))
+	copy(files, s.files)
+	s.mu.RUnlock()
+
 	type fileInfo struct {
 		relPath      string
 		relPathLower string
@@ -264,10 +299,10 @@ func (s *State) SortByDate(cache *MediaCache) {
 	if numWorkers < 1 {
 		numWorkers = 1
 	}
-	infos := make([]fileInfo, len(s.files))
+	infos := make([]fileInfo, len(files))
 	var wg sync.WaitGroup
-	tasks := make(chan int, len(s.files))
-	for i := range s.files {
+	tasks := make(chan int, len(files))
+	for i := range files {
 		tasks <- i
 	}
 	close(tasks)
@@ -276,8 +311,8 @@ func (s *State) SortByDate(cache *MediaCache) {
 		utils.SafeGo(func() {
 			defer wg.Done()
 			for i := range tasks {
-				rel := s.files[i]
-				abs := filepath.Join(s.root, rel)
+				rel := files[i]
+				abs := filepath.Join(root, rel)
 				var date time.Time
 				if meta := cache.GetMetadata(abs); meta != nil && meta.Date != "" {
 					date = utils.ParseExifDate(meta.Date)
@@ -302,6 +337,10 @@ func (s *State) SortByDate(cache *MediaCache) {
 		}
 		return infos[i].relPath < infos[j].relPath
 	})
+
+	// Commit under the write lock.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i, info := range infos {
 		s.files[i] = info.relPath
 		s.filesLower[i] = info.relPathLower

@@ -1,6 +1,7 @@
 package review
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -29,11 +30,105 @@ func TestServerSearchStream(t *testing.T) {
 	// We use a local bus listener if we had a way to intercept s.broadcast
 	// For now we'll just test that it runs without crashing.
 	// In a real TDD we would mock the broadcaster.
-	srv.SearchStream("vacation")
+	srv.SearchStream(context.Background(), "vacation")
 
 	// Since SearchStream is synchronous in its loop (just broadcasts),
 	// we can't easily capture the broadcast without a mock bus.
 	// But the implementation is now there.
+}
+
+// TestSearchStream_CancelStopsBroadcast locks in the P1-1 fix: a cancelled
+// SearchStream must stop emitting "search:results" promptly. Without
+// cancellation checks (ctx.Err() + select on ctx.Done), a slow search can keep
+// broadcasting stale results after the user has typed a new query.
+func TestSearchStream_CancelStopsBroadcast(t *testing.T) {
+	root := t.TempDir()
+	const fileCount = 500 // large enough to keep the loop busy for >50ms
+	for i := 0; i < fileCount; i++ {
+		_ = os.WriteFile(filepath.Join(root, fmt.Sprintf("vac_%04d.jpg", i)), []byte("x"), 0644)
+	}
+
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var resultsCount int
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == "search:results" {
+			mu.Lock()
+			resultsCount++
+			mu.Unlock()
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		srv.SearchStream(ctx, "vac")
+		close(done)
+	}()
+
+	// Wait long enough for at least one results broadcast, then cancel mid-flight.
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	firstSnapshot := resultsCount
+	mu.Unlock()
+	if firstSnapshot == 0 {
+		// Filesystem too fast: try again with slightly longer wait.
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SearchStream did not return within 2s after cancel")
+	}
+
+	// After cancel + a small grace period, the count must not keep growing —
+	// no further "search:results" broadcasts should be emitted for a cancelled
+	// search. The contract here is that cancellation is actually honored.
+	time.Sleep(60 * time.Millisecond) // > one batch interval (10ms)
+	mu.Lock()
+	afterCancel := resultsCount
+	mu.Unlock()
+
+	if afterCancel > firstSnapshot+1 {
+		t.Errorf("search:results count grew by %d after cancel (first=%d, after=%d) — cancellation not honored",
+			afterCancel-firstSnapshot, firstSnapshot, afterCancel)
+	}
+}
+
+// TestSearchStream_EmptyQueryEmitsComplete verifies the contract that an empty
+// query short-circuits with a complete event (no results, no nil-map).
+func TestSearchStream_EmptyQueryEmitsComplete(t *testing.T) {
+	root := t.TempDir()
+	_ = os.WriteFile(filepath.Join(root, "a.jpg"), []byte("x"), 0644)
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var sawComplete bool
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == "search:complete" {
+			mu.Lock()
+			sawComplete = true
+			mu.Unlock()
+		}
+	})
+
+	srv.SearchStream(context.Background(), "   ")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !sawComplete {
+		t.Fatal("expected search:complete broadcast for empty query")
+	}
 }
 
 func TestServerExportCancellation(t *testing.T) {

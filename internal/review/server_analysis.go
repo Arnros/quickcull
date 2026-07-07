@@ -18,6 +18,7 @@ func (s *Server) startBackgroundAnalysis(ctx context.Context) {
 	}
 
 	utils.SafeGo(func() {
+		defer s.analysisSched.Done()
 		s.runBackgroundAnalysis(subCtx)
 	})
 }

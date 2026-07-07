@@ -62,13 +62,13 @@ func (a *App) Log(level string, message string, context map[string]any) {
 }
 
 // Startup is called when the app starts.
-func (a *App) Startup(ctx context.Context) {
+func (a *App) Startup(ctx context.Context) error {
 	a.ctx = ctx
 	a.server.ctx = ctx
 
 	// Initialize persistence
 	if err := a.server.InitPersistence(); err != nil {
-		slog.Error("Failed to initialize persistence", "error", err)
+		return errors.Join(domain.ErrPersistenceInit, err)
 	}
 
 	// [v2 Refactoring] Start the immutable Reducer engine
@@ -81,6 +81,7 @@ func (a *App) Startup(ctx context.Context) {
 		slog.Int("cpus", runtime.NumCPU()),
 		slog.String("version", domain.AppVersion),
 	)
+	return nil
 }
 
 // OpenFolder opens a folder and initializes the state
@@ -402,7 +403,8 @@ func (a *App) GetStarredIndices() (FilteredIndicesResponse, error) {
 
 	indices := []int{}
 	for i, id := range a.server.appState.VisibleOrder {
-		if a.server.appState.Photos[id].IsStarred {
+		photo, ok := a.server.appState.Photos[id]
+		if ok && photo.IsStarred {
 			indices = append(indices, i)
 		}
 	}
@@ -420,12 +422,15 @@ func (a *App) GetLabelIndices(label int) (FilteredIndicesResponse, error) {
 
 	indices := []int{}
 	for i, id := range a.server.appState.VisibleOrder {
-		p := a.server.appState.Photos[id]
+		photo, ok := a.server.appState.Photos[id]
+		if !ok {
+			continue
+		}
 		if label == 0 {
-			if p.Label != 0 {
+			if photo.Label != 0 {
 				indices = append(indices, i)
 			}
-		} else if p.Label == label {
+		} else if photo.Label == label {
 			indices = append(indices, i)
 		}
 	}
@@ -851,10 +856,19 @@ func (a *App) ResetLabels() error {
 }
 
 // ResetAppCache clears the whole application cache directory but preserves the config file.
+// Coordinated with OpenFolder via the `loading` CAS to avoid concurrent teardown.
 func (a *App) ResetAppCache() error {
 	slog.Info("ResetAppCache: clearing cache directory")
-	exif.Cleanup()
+	if !a.loading.CompareAndSwap(false, true) {
+		// A folder load is in progress: refuse to race to avoid tearing down
+		// state/cache while a brand-new analysis is starting.
+		return domain.ErrLoadInProgress
+	}
+	defer a.loading.Store(false)
+
+	// Cancel analysis AND wake idle queue waiters so Wait() returns promptly.
 	a.server.analysisSched.Cancel()
+	a.server.analysisSched.Wait()
 
 	a.server.closePersistence()
 	a.server.cache.Close()
@@ -1044,19 +1058,31 @@ func (a *App) SavePosition(index int) {
 
 // Quit closes the app
 func (a *App) Quit() {
+	a.server.analysisSched.Cancel()
 	utils.StopFlusher()
 	exif.Cleanup()
 	wailsruntime.Quit(a.ctx)
 }
 
 // SearchStream triggers a streaming search based on a query.
+// Cancels any previous search to avoid stale results and goroutine leaks.
 func (a *App) SearchStream(query string) {
 	state := a.server.getState()
 	if state == nil {
 		return
 	}
+
+	a.server.searchMu.Lock()
+	if a.server.searchCancel != nil {
+		a.server.searchCancel()
+	}
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.server.searchCancel = cancel
+	a.server.searchMu.Unlock()
+
 	utils.SafeGo(func() {
-		a.server.SearchStream(query)
+		defer cancel()
+		a.server.SearchStream(ctx, query)
 	})
 }
 

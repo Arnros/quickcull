@@ -36,6 +36,8 @@ type Server struct {
 	ctx            context.Context
 	analysisSched  *analysisScheduler
 	analysisQueue  *AnalysisQueue
+	searchCancel   context.CancelFunc
+	searchMu       sync.Mutex
 	progressMu     sync.RWMutex
 	progressCur    int
 	progressTotal  int
@@ -114,10 +116,11 @@ func (s *Server) InitPersistence() error {
 
 // NewServer creates a new server instance.
 func NewServer() *Server {
+	q := NewAnalysisQueue()
 	return &Server{
 		cache:              NewMediaCache(),
-		analysisSched:      newAnalysisScheduler(),
-		analysisQueue:      NewAnalysisQueue(),
+		analysisSched:      newAnalysisScheduler(q.WakeAndCancel, q.Reset),
+		analysisQueue:      q,
 		Bus:                bus.New(),
 		savedPositionCache: make(map[string]int),
 	}
@@ -257,7 +260,7 @@ func (s *Server) PrioritizeIndices(indices []int) {
 }
 
 // SearchStream performs a case-insensitive filename search and streams results in batches.
-func (s *Server) SearchStream(query string) {
+func (s *Server) SearchStream(ctx context.Context, query string) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("SearchStream panic", "query", query, "error", r)
@@ -283,6 +286,9 @@ func (s *Server) SearchStream(query string) {
 	s.stateMu.RUnlock()
 
 	for i, f := range filesLower {
+		if ctx.Err() != nil {
+			return
+		}
 		if strings.Contains(f, query) {
 			indices = append(indices, i)
 		}
@@ -295,7 +301,11 @@ func (s *Server) SearchStream(query string) {
 			})
 			indices = []int{}
 			// Small sleep to avoid saturating the bridge if there are too many results
-			time.Sleep(10 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
 		}
 	}
 

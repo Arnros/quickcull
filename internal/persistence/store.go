@@ -3,6 +3,7 @@ package persistence
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -40,12 +41,12 @@ const (
 // NewMetadataStore initializes the database at the given path.
 func NewMetadataStore(dbPath string) (StateStore, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create metadata directory: %w", err)
 	}
 
 	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: dbOpenTimeout})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open metadata database: %w", err)
 	}
 
 	// Initialize system bucket
@@ -55,7 +56,7 @@ func NewMetadataStore(dbPath string) (StateStore, error) {
 	})
 	if err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("init metadata system bucket: %w", err)
 	}
 
 	return &MetadataStore{db: db}, nil
@@ -63,6 +64,9 @@ func NewMetadataStore(dbPath string) (StateStore, error) {
 
 // Close closes the database.
 func (s *MetadataStore) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
 	return s.db.Close()
 }
 
@@ -97,9 +101,11 @@ func (s *MetadataStore) ClearMetadataScope(folderID, scope string) error {
 			if changed {
 				data, err := json.Marshal(meta)
 				if err != nil {
-					return err
+					return fmt.Errorf("marshal metadata for %s: %w", string(k), err)
 				}
-				return b.Put(k, data)
+				if err := b.Put(k, data); err != nil {
+					return fmt.Errorf("clear scope %q for %s: %w", scope, string(k), err)
+				}
 			}
 			return nil
 		})
@@ -115,14 +121,23 @@ func (s *MetadataStore) LoadFolderMetadata(folderID string) (map[string]PhotoMet
 			return nil
 		}
 		return b.ForEach(func(k, v []byte) error {
-			var meta PhotoMetadata
-			if err := json.Unmarshal(v, &meta); err == nil {
-				metadata[string(k)] = meta
+			key := string(k)
+			if key == "_history" || key == "_snapshot" {
+				return nil
 			}
+			var meta PhotoMetadata
+			if err := json.Unmarshal(v, &meta); err != nil {
+				slog.Warn("persistence: skipping unmarshable metadata", "folder", folderID, "key", key, "error", err)
+				return nil
+			}
+			metadata[key] = meta
 			return nil
 		})
 	})
-	return metadata, err
+	if err != nil {
+		return nil, fmt.Errorf("load folder metadata %s: %w", folderID, err)
+	}
+	return metadata, nil
 }
 
 // SavePhotoMetadata saves metadata for a single photo in a folder.
@@ -130,13 +145,16 @@ func (s *MetadataStore) SavePhotoMetadata(folderID, photoID string, meta PhotoMe
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(folderID))
 		if err != nil {
-			return err
+			return fmt.Errorf("create bucket for %s: %w", folderID, err)
 		}
 		data, err := json.Marshal(meta)
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal metadata for %s/%s: %w", folderID, photoID, err)
 		}
-		return b.Put([]byte(photoID), data)
+		if err := b.Put([]byte(photoID), data); err != nil {
+			return fmt.Errorf("save metadata for %s/%s: %w", folderID, photoID, err)
+		}
+		return nil
 	})
 }
 
@@ -147,7 +165,10 @@ func (s *MetadataStore) RemovePhotoMetadata(folderID, photoID string) error {
 		if b == nil {
 			return nil
 		}
-		return b.Delete([]byte(photoID))
+		if err := b.Delete([]byte(photoID)); err != nil {
+			return fmt.Errorf("remove metadata for %s/%s: %w", folderID, photoID, err)
+		}
+		return nil
 	})
 }
 
@@ -156,7 +177,7 @@ func (s *MetadataStore) SaveFolderMetadata(folderID string, metadata map[string]
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(folderID))
 		if err != nil {
-			return err
+			return fmt.Errorf("create bucket for %s: %w", folderID, err)
 		}
 		for id, meta := range metadata {
 			data, err := json.Marshal(meta)
@@ -164,7 +185,7 @@ func (s *MetadataStore) SaveFolderMetadata(folderID string, metadata map[string]
 				return fmt.Errorf("marshal metadata for %s: %w", id, err)
 			}
 			if err := b.Put([]byte(id), data); err != nil {
-				return err
+				return fmt.Errorf("save metadata for %s/%s: %w", folderID, id, err)
 			}
 		}
 		return nil
@@ -176,9 +197,12 @@ func (s *MetadataStore) SaveHistory(folderID string, history []byte) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(folderID))
 		if err != nil {
-			return err
+			return fmt.Errorf("create bucket for %s: %w", folderID, err)
 		}
-		return b.Put([]byte("_history"), history)
+		if err := b.Put([]byte("_history"), history); err != nil {
+			return fmt.Errorf("save history for %s: %w", folderID, err)
+		}
+		return nil
 	})
 }
 
@@ -197,7 +221,10 @@ func (s *MetadataStore) LoadHistory(folderID string) ([]byte, error) {
 		}
 		return nil
 	})
-	return history, err
+	if err != nil {
+		return nil, fmt.Errorf("load history for %s: %w", folderID, err)
+	}
+	return history, nil
 }
 
 // GetFolderInfo retrieves the metadata about the folder itself (path, last scan).
@@ -226,9 +253,12 @@ func (s *MetadataStore) SaveFolderInfo(folderID string, info FolderInfo) error {
 		b := tx.Bucket([]byte(bucketInfo))
 		data, err := json.Marshal(info)
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal folder info for %s: %w", folderID, err)
 		}
-		return b.Put([]byte(folderID), data)
+		if err := b.Put([]byte(folderID), data); err != nil {
+			return fmt.Errorf("save folder info for %s: %w", folderID, err)
+		}
+		return nil
 	})
 }
 
@@ -238,9 +268,12 @@ func (s *MetadataStore) SaveFolderSnapshot(folderID string, snap FolderSnapshot)
 		b := tx.Bucket([]byte(bucketInfo))
 		data, err := json.Marshal(snap)
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal folder snapshot for %s: %w", folderID, err)
 		}
-		return b.Put([]byte(snapshotPrefix+folderID), data)
+		if err := b.Put([]byte(snapshotPrefix+folderID), data); err != nil {
+			return fmt.Errorf("save folder snapshot for %s: %w", folderID, err)
+		}
+		return nil
 	})
 }
 

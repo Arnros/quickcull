@@ -218,22 +218,116 @@ func TestEventUnmarshalNestedBatchRejected(t *testing.T) {
 	}
 }
 
-func TestBusDropsEventWhenChannelFull(t *testing.T) {
+// TestBusDropsStateEventWhenChannelFull verifies that State events are dropped
+// (and tracked) when the small State subscriber channel saturates, keeping the
+// analyzer loop non-blocking. Command events use a much larger buffer and are
+// exercised separately.
+func TestBusDropsStateEventWhenChannelFull(t *testing.T) {
 	b := New()
-	ch := b.Subscribe(TypeCommandToggleStar)
+	ch := b.Subscribe(TypeStateUpdated)
 
 	// Publish more events than the channel buffer can hold.
 	total := subscriberChannelBuffer + 5
 	for i := 0; i < total; i++ {
 		// Publish must return immediately (non-blocking) even when the channel is full.
 		b.Publish(Event{
-			Type:    TypeCommandToggleStar,
-			Payload: CommandToggleStarPayload{PhotoID: "y.jpg"},
+			Type:    TypeStateUpdated,
+			Payload: nil,
 		})
 	}
 
 	// Exactly subscriberChannelBuffer events should be buffered; extras are dropped.
 	if got := len(ch); got != subscriberChannelBuffer {
 		t.Errorf("channel length = %d, want %d (extras should be dropped)", got, subscriberChannelBuffer)
+	}
+
+	dropped := b.DroppedEvents()
+	if dropped[TypeStateUpdated] != 5 {
+		t.Errorf("dropped StateUpdated = %d, want 5", dropped[TypeStateUpdated])
+	}
+}
+
+// TestBusCommandBufferLargerThanState ensures Command subscribers get the
+// larger command buffer so user intent does not get dropped under burst.
+func TestBusCommandBufferLargerThanState(t *testing.T) {
+	b := New()
+	cmdCh := b.Subscribe(TypeCommandToggleStar)
+	stateCh := b.Subscribe(TypeStateUpdated)
+
+	if cap(cmdCh) != commandChannelBuffer {
+		t.Errorf("command channel cap = %d, want %d", cap(cmdCh), commandChannelBuffer)
+	}
+	if cap(stateCh) != subscriberChannelBuffer {
+		t.Errorf("state channel cap = %d, want %d", cap(stateCh), subscriberChannelBuffer)
+	}
+}
+
+// TestBus_PublishCommandSurvivesBurst locks in the P0-1 fix behavior: Command*
+// events are NEVER dropped in realistic interactive bursts. Without this
+// assertion, someone can shrink commandChannelBuffer back to 100 and the only
+// failure would be a `cap(ch)` mismatch — not a behavioral signal.
+//
+// Scenario: subscribe to one Command type, never drain it, publish 50 more
+// events than the State buffer can hold (which would have dropped them under
+// the old single-buffer scheme). Assert: every event is buffered (no drop) and
+// DroppedEvents[CommandToggleStar] == 0.
+func TestBus_PublishCommandSurvivesBurst(t *testing.T) {
+	b := New()
+	ch := b.Subscribe(TypeCommandToggleStar)
+
+	burst := subscriberChannelBuffer + 50 // would have dropped at least 50 with the old buffer.
+	for i := 0; i < burst; i++ {
+		b.Publish(Event{
+			Type:    TypeCommandToggleStar,
+			Payload: CommandToggleStarPayload{PhotoID: "p.jpg"},
+		})
+	}
+
+	if got := len(ch); got != burst {
+		t.Errorf("command channel buffered %d events, want %d (user intent must not be dropped)", got, burst)
+	}
+
+	dropped := b.DroppedEvents()
+	if dropped[TypeCommandToggleStar] != 0 {
+		t.Errorf("CommandToggleStar dropped = %d, want 0 (commands never drop)", dropped[TypeCommandToggleStar])
+	}
+}
+
+// TestBus_DroppedEventsAtomicReset ensures DroppedEvents works under concurrent
+// publish and reset (the P2-6 atomic-counter fix).
+func TestBus_DroppedEventsAtomicReset(t *testing.T) {
+	b := New()
+	ch := b.Subscribe(TypeStateUpdated)
+
+	const droppedCount = 25
+	for i := 0; i < subscriberChannelBuffer+droppedCount; i++ {
+		b.Publish(Event{Type: TypeStateUpdated})
+	}
+
+	got := b.DroppedEvents()
+	if got[TypeStateUpdated] != droppedCount {
+		t.Fatalf("first call: dropped = %d, want %d", got[TypeStateUpdated], droppedCount)
+	}
+
+	// Drain channel, no new drops expected because channel is now being drained by the second batch.
+	// (Drain then publish a small overflow of 3 and confirm we read back exactly 3.)
+	for {
+		select {
+		case <-ch:
+		default:
+			goto overflow
+		}
+	}
+overflow:
+	for i := 0; i < subscriberChannelBuffer+3; i++ {
+		b.Publish(Event{Type: TypeStateUpdated})
+	}
+
+	got2 := b.DroppedEvents()
+	if got2[TypeStateUpdated] != 3 {
+		t.Errorf("after reset: dropped = %d, want 3", got2[TypeStateUpdated])
+	}
+	if got3 := b.DroppedEvents(); got3[TypeStateUpdated] != 0 {
+		t.Errorf("after second call: dropped = %d, want 0 (counters reset)", got3[TypeStateUpdated])
 	}
 }

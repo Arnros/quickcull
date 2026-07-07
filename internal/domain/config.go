@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"quickcull/internal/utils"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -195,7 +196,14 @@ func saveConfig() error {
 func ExiftoolPath() string {
 	path := GetConfig().ExiftoolPath
 	if path != "" {
-		return path
+		// Security: reject configured paths that are relative or contain traversal.
+		if !filepath.IsAbs(path) || strings.Contains(path, "..") {
+			slog.Warn("configured exiftool path rejected: must be absolute and not contain '..', falling back", "path", path)
+		} else if info, err := os.Stat(path); err != nil || info.IsDir() {
+			slog.Warn("configured exiftool path rejected: not an executable file, falling back", "path", path, "error", err)
+		} else {
+			return path
+		}
 	}
 
 	// 1. Try LookPath first (checks system PATH)

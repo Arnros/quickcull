@@ -177,3 +177,98 @@ func TestAnalysisQueue_PopWithTierPreferenceOnClosedQueue(t *testing.T) {
 		t.Fatal("expected ok=false on closed empty queue")
 	}
 }
+
+// TestAnalysisQueue_PopReturnsOnWakeAndCancel locks in the P0-2 fix: an idle
+// Pop blocked on cond.Wait must return ok=false promptly when WakeAndCancel is
+// invoked (the mechanism used by analysisScheduler.Cancel + ResetAppCache).
+// Without this, ResetAppCache hangs indefinitely when the queue is empty.
+func TestAnalysisQueue_PopReturnsOnWakeAndCancel(t *testing.T) {
+	q := NewAnalysisQueue()
+
+	done := make(chan struct{})
+	go func() {
+		_, _, ok := q.Pop()
+		if ok {
+			t.Errorf("expected ok=false after WakeAndCancel")
+		}
+		close(done)
+	}()
+
+	// Confirm Pop is actually blocked on the empty queue.
+	select {
+	case <-done:
+		t.Fatal("Pop should have blocked on empty queue")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	q.WakeAndCancel()
+
+	select {
+	case <-done:
+		// Success: unblocked without Close().
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Pop failed to unblock within 500ms after WakeAndCancel")
+	}
+
+	// Subsequent Push must return ok=false (queue still in cancelled state).
+	q.Push(1, 10)
+	if _, _, ok := q.Pop(); ok {
+		t.Fatal("expected ok=false on cancelled queue post-cancel")
+	}
+}
+
+// TestAnalysisQueue_WakeAndCancelIsIdempotent ensures double cancel does not
+// panic (close on already-closed cancelCh would).
+func TestAnalysisQueue_WakeAndCancelIsIdempotent(t *testing.T) {
+	q := NewAnalysisQueue()
+	q.WakeAndCancel()
+	q.WakeAndCancel() // must not panic
+	q.WakeAndCancel() // must not panic
+}
+
+// TestAnalysisQueue_ResetReArmsCancelledQueue ensures Reset rebuilds a usable
+// queue after a Cancel — this is the lifecycle exercised by BeginLoadLifecycle.
+func TestAnalysisQueue_ResetReArmsCancelledQueue(t *testing.T) {
+	q := NewAnalysisQueue()
+	q.WakeAndCancel()
+	if _, _, ok := q.Pop(); ok {
+		t.Fatal("expected ok=false after WakeAndCancel")
+	}
+
+	q.Reset()
+
+	q.Push(7, 50)
+	idx, _, ok := q.Pop()
+	if !ok || idx != 7 {
+		t.Fatalf("after Reset, expected pop idx=7 ok=true, got idx=%d ok=%v", idx, ok)
+	}
+}
+
+// TestAnalysisQueue_PopWithTierPreferenceReturnsOnWakeAndCancel mirrors the
+// Pop test for the tiered variant, which is the one actually called by workers.
+func TestAnalysisQueue_PopWithTierPreferenceReturnsOnWakeAndCancel(t *testing.T) {
+	q := NewAnalysisQueue()
+
+	done := make(chan struct{})
+	go func() {
+		_, _, ok := q.PopWithTierPreference([]queueTier{tierInteractive, tierWarm, tierBulk})
+		if ok {
+			t.Errorf("expected ok=false after WakeAndCancel")
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("PopWithTierPreference should have blocked on empty queue")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	q.WakeAndCancel()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("PopWithTierPreference failed to unblock after WakeAndCancel")
+	}
+}

@@ -117,3 +117,103 @@ func TestApplyEventDoesNotBlockOnPersistence(t *testing.T) {
 		t.Fatalf("unexpected persisted history: %+v", history)
 	}
 }
+
+// TestAsyncMetadataWriter_CloseFlushesPending verifies that close() flushes any
+// pending writes before exiting (the P1 code path: "stopTimer(); w.flush();
+// close(doneCh)"). Without this guarantee, the app would lose unflushed
+// metadata at shutdown.
+func TestAsyncMetadataWriter_CloseFlushesPending(t *testing.T) {
+	store := newNonBlockingPersistence()
+	w := newAsyncMetadataWriter(store)
+
+	const photoCount = 10
+	for i := 0; i < photoCount; i++ {
+		w.enqueueSingle("folder1", "photo"+itoa(i), persistence.PhotoMetadata{IsStarred: true})
+	}
+	w.enqueueHistory("folder1", []byte("h1"))
+
+	// close() must flush all pending before returning.
+	w.close()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.photoCalls != photoCount {
+		t.Errorf("photoCalls = %d, want %d (pending must be flushed at close)", store.photoCalls, photoCount)
+	}
+	if store.historyCalls != 1 {
+		t.Errorf("historyCalls = %d, want 1", store.historyCalls)
+	}
+	if len(store.lastHistory) != 2 {
+		t.Errorf("lastHistory length = %d, want 2 (\"h1\")", len(store.lastHistory))
+	}
+}
+
+// TestAsyncMetadataWriter_FlushAndWaitSerializes ensures flushAndWait actually
+// blocks until the loop has completed a flush, providing the synchronization
+// API used by ResetAppCache and OnBeforeClose.
+func TestAsyncMetadataWriter_FlushAndWaitSerializes(t *testing.T) {
+	store := newNonBlockingPersistence()
+	w := newAsyncMetadataWriter(store)
+
+	w.enqueueSingle("f", "p", persistence.PhotoMetadata{IsStarred: true})
+
+	done := make(chan struct{})
+	go func() {
+		w.flushAndWait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("flushAndWait did not return within 2s")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.photoCalls == 0 {
+		t.Fatal("expected at least one photo call after flushAndWait")
+	}
+}
+
+// TestAsyncMetadataWriter_CloseWithoutPendingIsFast ensures close() with an
+// empty queue returns promptly (no deadlock waiting on an unstarted timer).
+func TestAsyncMetadataWriter_CloseWithoutPendingIsFast(t *testing.T) {
+	store := newNonBlockingPersistence()
+	w := newAsyncMetadataWriter(store)
+
+	done := make(chan struct{})
+	go func() {
+		w.close()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("close() with no pending writes took > 1s")
+	}
+}
+
+// newNonBlockingPersistence returns a blockingPersistence variant where Save*
+// calls never block, so tests can flush deterministically without releasing.
+func newNonBlockingPersistence() *blockingPersistence {
+	p := newBlockingPersistence()
+	p.release = make(chan struct{}, 1000)
+	for i := 0; i < 1000; i++ {
+		p.release <- struct{}{}
+	}
+	return p
+}
+
+// itoa is a tiny strconv-free helper to avoid pulling in strconv just for test
+// formatting.
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b []byte
+	for i > 0 {
+		b = append([]byte{byte('0' + i%10)}, b...)
+		i /= 10
+	}
+	return string(b)
+}

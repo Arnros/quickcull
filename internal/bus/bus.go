@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // EventType strongly types our system events.
@@ -12,7 +13,17 @@ type EventType string
 // subscriberChannelBuffer is the capacity of each subscriber's event channel.
 // A buffer of 100 absorbs short bursts (e.g. rapid label changes) without
 // blocking the publisher, while staying well within memory budget (~3 KB/subscriber).
+// subscriberChannelBuffer is the capacity of each subscriber's event channel.
+// A buffer of 100 absorbs short bursts (e.g. rapid label changes) without
+// blocking the publisher, while staying well within memory budget (~3 KB/subscriber).
 const subscriberChannelBuffer = 100
+
+// commandChannelBuffer is the buffer used for Command* (user intent) subscribers.
+// Sized orders of magnitude larger than State channels so user actions are effectively
+// never dropped under realistic interactive throughput (keynote-fast culling).
+// If this buffer ever fills, DroppedEvents surfaces it as a diagnostic signal rather
+// than silently losing user intent.
+const commandChannelBuffer = 4096
 
 const (
 	// Intention Commands (UI -> Core)
@@ -167,7 +178,7 @@ type StateUpdatedPayload struct {
 type Bus struct {
 	mu          sync.RWMutex
 	subscribers map[EventType][]chan Event
-	dropped     sync.Map // map[EventType]int64 — dropped event counters
+	dropped     sync.Map // map[EventType]*atomic.Int64 — dropped event counters
 }
 
 // New creates a new Event Bus.
@@ -178,19 +189,24 @@ func New() *Bus {
 }
 
 // Subscribe returns a channel that will receive events of the given type.
+// Command* subscribers get a vastly larger buffer to guarantee user intent
+// is never dropped under realistic interactive throughput.
 func (b *Bus) Subscribe(t EventType) <-chan Event {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	ch := make(chan Event, subscriberChannelBuffer)
+	buf := subscriberChannelBuffer
+	if isCommandType(t) {
+		buf = commandChannelBuffer
+	}
+	ch := make(chan Event, buf)
 	b.subscribers[t] = append(b.subscribers[t], ch)
 	return ch
 }
 
 // Publish broadcasts an event to all subscribers synchronously.
-// In a real high-throughput scenario, we might want this to be async,
-// but for QuickCull's zero-ingestion desktop model, sync broadcast guarantees
-// immediate predictability for UI updates.
+// Drops are tracked atomically; user-intent Commands drop much later (4096 buffer)
+// and surface via DroppedEvents for diagnosis rather than silent loss.
 func (b *Bus) Publish(e Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -201,23 +217,36 @@ func (b *Bus) Publish(e Event) {
 			case ch <- e:
 			default:
 				// Channel full: track drop count for diagnostics.
-				val, _ := b.dropped.LoadOrStore(e.Type, int64(0))
-				b.dropped.Store(e.Type, val.(int64)+1)
+				v, _ := b.dropped.LoadOrStore(e.Type, &atomic.Int64{})
+				v.(*atomic.Int64).Add(1)
 			}
 		}
 	}
 }
 
+// isCommandType reports whether the event type carries user intent and gets
+// the larger command buffer to avoid silent loss under rapid culling.
+func isCommandType(t EventType) bool {
+	switch t {
+	case TypeCommandToggleStar, TypeCommandTrashPhoto, TypeCommandLabelPhoto,
+		TypeCommandRotatePhoto, TypeCommandUndo, TypeCommandResetMetadata, TypeCommandBatch:
+		return true
+	}
+	return false
+}
+
 // DroppedEvents returns the number of events dropped per type since the
-// last call. Calling this method resets the counters.
+// last call. Calling this method resets the counters atomically.
 func (b *Bus) DroppedEvents() map[EventType]int64 {
 	result := make(map[EventType]int64)
 	b.dropped.Range(func(key, value any) bool {
 		t, tok := key.(EventType)
-		n, nok := value.(int64)
-		if tok && nok && n > 0 {
-			result[t] = n
-			b.dropped.Store(key, int64(0))
+		counter, cok := value.(*atomic.Int64)
+		if tok && cok {
+			n := counter.Swap(0)
+			if n > 0 {
+				result[t] = n
+			}
 		}
 		return true
 	})

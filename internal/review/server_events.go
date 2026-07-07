@@ -12,9 +12,10 @@ func (s *Server) applyEvent(ev bus.Event) (bool, bus.Event, error) {
 	// inversion with RefreshVisibleOrder (state.mu → appStateMu).
 	// Also re-acquires state fresh to avoid stale pointer (was captured too early).
 	isStruct := isStructuralChange(ev)
+	_, isUndo := ev.Payload.(bus.CommandUndoPayload)
 	var filesSnapshot []string
 
-	if isStruct {
+	if isStruct && !isUndo {
 		state := s.getState()
 		if state != nil {
 			state.mu.RLock()
@@ -92,6 +93,12 @@ func (s *Server) applyEvent(ev bus.Event) (bool, bus.Event, error) {
 	// For structural changes, send SyncState with IsPartial=true and include only affected photos
 	affected := affectedPhotosFromEvent(appliedEvent)
 	s.broadcastAppStateSelective(nextState, true, affected)
+
+	// For undo of structural changes, files were restored after the logical undo.
+	// RefreshVisibleOrder re-syncs VisibleOrder from the now-restored physical state.
+	if isUndo {
+		s.RefreshVisibleOrder()
+	}
 
 	return true, appliedEvent, nil
 }

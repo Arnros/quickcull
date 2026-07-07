@@ -11,23 +11,31 @@ type analysisScheduler struct {
 	currentLoadID uint64
 	startedLoadID uint64
 	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	onCancel      func() // unblocks queue waiters (WakeAndCancel)
+	onReset       func() // re-arms the queue for a new load (Reset)
 }
 
-func newAnalysisScheduler() *analysisScheduler {
-	return &analysisScheduler{}
+func newAnalysisScheduler(onCancel, onReset func()) *analysisScheduler {
+	return &analysisScheduler{onCancel: onCancel, onReset: onReset}
 }
 
 func (s *analysisScheduler) BeginLoadLifecycle() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.cancel != nil {
 		slog.Info("AnalysisScheduler: cancelling previous analysis for new load lifecycle", "loadID", s.currentLoadID)
 		s.cancel()
 		s.cancel = nil
 	}
-
+	onReset := s.onReset
 	s.currentLoadID++
+	s.mu.Unlock()
+
+	// Re-arm the queue outside the scheduler lock: Cancel() may be running
+	// concurrently and would otherwise deadlock on the same lock.
+	if onReset != nil {
+		onReset()
+	}
 }
 
 func (s *analysisScheduler) TryStart(ctx context.Context) (context.Context, bool) {
@@ -51,18 +59,35 @@ func (s *analysisScheduler) TryStart(ctx context.Context) (context.Context, bool
 	subCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	s.startedLoadID = s.currentLoadID
+	s.wg.Add(1)
 	slog.Info("AnalysisScheduler: analysis started", "loadID", s.currentLoadID)
 
 	return subCtx, true
 }
 
+// Wait blocks until the analysis goroutine for the current load has exited.
+func (s *analysisScheduler) Wait() {
+	s.wg.Wait()
+}
+
+// Done decrements the scheduler WaitGroup. Called by the analysis goroutine
+// when runBackgroundAnalysis returns.
+func (s *analysisScheduler) Done() {
+	s.wg.Done()
+}
+
 // Cancel stops any in-progress analysis started by this scheduler.
+// Also wakes idle queue waiters so Pop returns ok=false promptly.
 func (s *analysisScheduler) Cancel() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
+	}
+	onCancel := s.onCancel
+	s.mu.Unlock()
+	if onCancel != nil {
+		onCancel()
 	}
 }
 

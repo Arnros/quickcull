@@ -43,4 +43,6 @@ var (
 	ErrTrashCopyFailed       = CodedError{Code: "trash_copy_failed"}
 	ErrTrashDirCreate        = CodedError{Code: "trash_dir_create_failed"}
 	ErrInvalidPath           = CodedError{Code: "invalid_path"}
+	ErrPersistenceInit       = CodedError{Code: "persistence_init_failed"}
+	ErrLoadInProgress        = CodedError{Code: "load_in_progress"}
 )

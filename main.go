@@ -100,7 +100,9 @@ func main() {
 			if cfg.WindowX >= 0 && cfg.WindowY >= 0 {
 				wailsruntime.WindowSetPosition(ctx, cfg.WindowX, cfg.WindowY)
 			}
-			app.Startup(ctx)
+			if err := app.Startup(ctx); err != nil {
+				slog.Error("Startup failed", "error", err)
+			}
 		},
 		OnBeforeClose: func(ctx context.Context) bool {
 			isMaximized := wailsruntime.WindowIsMaximised(ctx)

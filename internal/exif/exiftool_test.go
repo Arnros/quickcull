@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -111,4 +112,89 @@ func TestIsExiftoolAvailable_ResetCache(t *testing.T) {
 		t.Fatal("expected exiftool cache to be reset (uninitialized)")
 	}
 	exiftoolAvailableMu.Unlock()
+}
+
+// TestSession_CloseKillsProcessOnTimeout locks in the P1 exiftool fix:
+// if `cmd.Wait()` does not return within closeTimeout, Close must kill the
+// underlying process so we don't leak zombie exiftool processes (e.g. when
+// exiftool itself has hung on a stuck pipe).
+//
+// We simulate a stuck process by spawning a child that ignores stdin and
+// blocks for far longer than closeTimeout. The test asserts that:
+//   1. Close returns within ~2×closeTimeout (kill path)
+//   2. The child process is actually terminated (no orphan)
+func TestSession_CloseKillsProcessOnTimeout(t *testing.T) {
+	// Spawn a long-running child that ignores its stdin curl entirely.
+	// We invoke `sleep` via bash so we can redirect stdin from /dev/null and
+	// ensure the child never sees Close's "-stay_open False" handshake.
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("sleep unavailable: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+			_ = cmd.Process.Kill()
+		}
+	})
+
+	s := &Session{
+		active: true,
+		cmd:    cmd,
+		stdin:  nopWriteCloser{Writer: &bytes.Buffer{}},
+	}
+
+	// Patch closeTimeout to a short value for the duration of the test so we
+	// don't actually wait 5s. Restore it on cleanup.
+	orig := closeTimeout
+	defer func() { closeTimeout = orig }()
+	closeTimeout = 200 * time.Millisecond
+
+	start := time.Now()
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	// Must return within ~1×closeTimeout (kill resolution), not 30s.
+	if elapsed > time.Second {
+		t.Fatalf("Close took %v, expected < 1s (kill path not exercised)", elapsed)
+	}
+
+	// Process must be terminated. cmd.ProcessState is populated only after
+// cmd.Wait() returns, so a non-nil ProcessState means the child actually
+// exited (here: was killed by our timeout). Exited() would return false on
+// a signal kill, so we don't rely on it.
+	if cmd.ProcessState == nil {
+		t.Fatalf("process state is nil after Close; child was not Wait'd (still running?)")
+	}
+}
+
+// TestSession_CloseIdempotent verifies that calling Close multiple times on the
+// same session is safe (Quit + ResetAppCache may both call it).
+func TestSession_CloseIdempotent(t *testing.T) {
+	cmd := exec.Command("sleep", "1")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("sleep unavailable: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+			_ = cmd.Process.Kill()
+		}
+	})
+
+	s := &Session{
+		active: true,
+		cmd:    cmd,
+		stdin:  nopWriteCloser{Writer: &bytes.Buffer{}},
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("third Close: %v", err)
+	}
 }

@@ -126,15 +126,27 @@ func TestExiftoolPath(t *testing.T) {
 		configMu.Unlock()
 	})
 
-	// Case 1: Configured path is absolute and non-empty
+	// Case 1: Configured path is absolute and exists
+	dummyExe := filepath.Join(t.TempDir(), "exiftool")
+	if err := os.WriteFile(dummyExe, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	configMu.Lock()
+	config = Config{ExiftoolPath: dummyExe}
+	configMu.Unlock()
+	if got := ExiftoolPath(); got != dummyExe {
+		t.Errorf("ExiftoolPath() = %q, expected %q", got, dummyExe)
+	}
+
+	// Case 2: Configured path does not exist or is insecure: falls back.
 	configMu.Lock()
 	config = Config{ExiftoolPath: "/some/custom/path/exiftool"}
 	configMu.Unlock()
-	if got := ExiftoolPath(); got != "/some/custom/path/exiftool" {
-		t.Errorf("ExiftoolPath() = %q, expected %q", got, "/some/custom/path/exiftool")
+	if got := ExiftoolPath(); got == "/some/custom/path/exiftool" {
+		t.Errorf("ExiftoolPath() accepted non-existent path")
 	}
 
-	// Case 2: Configured path is empty, falls back to PATH lookup or auto-detection
+	// Case 3: Configured path is empty, falls back to PATH lookup or auto-detection
 	configMu.Lock()
 	config = Config{ExiftoolPath: ""}
 	configMu.Unlock()

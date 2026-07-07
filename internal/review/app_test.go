@@ -642,3 +642,98 @@ func waitForCondition(t *testing.T, message string, check func() bool) {
 	}
 	t.Fatal(message)
 }
+
+// TestResetAppCache_BusyWhenLoadingInProgress locks in the P2-7 fix: if
+// OpenFolder holds the `loading` CAS, ResetAppCache must refuse to race by
+// returning domain.ErrLoadInProgress rather than nil-checking state in the
+// middle of a load.
+func TestResetAppCache_BusyWhenLoadingInProgress(t *testing.T) {
+	app := NewApp(NewServer())
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	app.ctx = ctx
+
+	// Simulate OpenFolder in flight.
+	if !app.loading.CompareAndSwap(false, true) {
+		t.Fatal("expected initial CAS(false,true) to succeed")
+	}
+
+	err := app.ResetAppCache()
+	if err != domain.ErrLoadInProgress {
+		t.Fatalf("expected ErrLoadInProgress, got %v", err)
+	}
+
+	// Release the load; ResetAppCache must now succeed (no state to clean, but
+	// coordination behavior itself is the contract being tested).
+	app.loading.Store(false)
+
+	if err := app.ResetAppCache(); err != nil {
+		t.Fatalf("expected nil error after load released, got %v", err)
+	}
+	if app.server.state != nil {
+		t.Errorf("state should be nil after ResetAppCache")
+	}
+}
+
+// TestResetAppCache_PreservesConfigJSON ensures the user's config.json survives
+// a cache-wide wipe — it is the one entry explicitly spared by name.
+func TestResetAppCache_PreservesConfigJSON(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Dir(cacheDir))
+
+	domain.GetAppCacheDir() // ensure dir
+
+	cfgPath := filepath.Join(domain.GetAppCacheDir(), "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"windowWidth":1234}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(domain.GetAppCacheDir(), "stale.db"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp(NewServer())
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	app.ctx = ctx
+
+	if err := app.ResetAppCache(); err != nil {
+		t.Fatalf("ResetAppCache: %v", err)
+	}
+
+	if _, err := os.Stat(cfgPath); err != nil {
+		t.Errorf("config.json should be preserved, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(domain.GetAppCacheDir(), "stale.db")); err == nil {
+		t.Errorf("stale.db should have been removed")
+	}
+}
+
+// TestResetAppCache_WakesIdleAnalysisWorkers ensures the coordination path that
+// was the bug P0-2: when background analysis is mid-flight (and idle on the
+// queue), ResetAppCache+Wait must return within a bounded deadline instead of
+// hanging on cond.Wait.
+func TestResetAppCache_WakesIdleAnalysisWorkers(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	app, server, _ := newAppWithState(t, []string{"a.jpg", "b.jpg", "c.jpg"})
+
+	// Start analysis with workers sitting on an empty queue: this is the exact
+	// condition that hung ResetAppCache before the WakeAndCancel fix.
+	ctx, cancel := context.WithCancel(app.ctx)
+	t.Cleanup(cancel)
+	server.startBackgroundAnalysis(ctx)
+
+	// Give workers time to enter cond.Wait on the empty queue.
+	time.Sleep(150 * time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() { done <- app.ResetAppCache() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ResetAppCache returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ResetAppCache hung > 2s — analysis workers were not woken")
+	}
+}

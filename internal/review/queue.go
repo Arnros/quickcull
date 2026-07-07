@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,12 +54,14 @@ func (pq *PriorityQueue) Pop() any {
 
 // AnalysisQueue is a thread-safe wrapper around PriorityQueue.
 type AnalysisQueue struct {
-	mu       sync.Mutex
-	pq       PriorityQueue
-	set      map[int]*Item
-	buckets  map[int][]*Item // secondary index by priority for O(1) tier access
-	cond     *sync.Cond
-	isClosed bool
+	mu        sync.Mutex
+	pq        PriorityQueue
+	set       map[int]*Item
+	buckets   map[int][]*Item // secondary index by priority for O(1) tier access
+	cond      *sync.Cond
+	isClosed  bool
+	cancelCh  chan struct{} // closed by WakeAndCancel to unblock all waiters
+	cancelled atomic.Bool
 }
 
 type queueTier int
@@ -71,8 +74,9 @@ const (
 
 func NewAnalysisQueue() *AnalysisQueue {
 	q := &AnalysisQueue{
-		set:     make(map[int]*Item),
-		buckets: make(map[int][]*Item),
+		set:      make(map[int]*Item),
+		buckets:  make(map[int][]*Item),
+		cancelCh: make(chan struct{}),
 	}
 	q.cond = sync.NewCond(&q.mu)
 	heap.Init(&q.pq)
@@ -80,11 +84,38 @@ func NewAnalysisQueue() *AnalysisQueue {
 	return q
 }
 
+// WakeAndCancel unblocks all idle waiters so Pop returns immediately with ok=false.
+// Used to cancel in-flight analysis when the load lifecycle is being torn down
+// (e.g. ResetAppCache). Single-shot: closing cancelCh via sync.Once-like guard.
+// Subsequent calls are no-ops.
+func (q *AnalysisQueue) WakeAndCancel() {
+	q.mu.Lock()
+	if q.cancelled.Load() {
+		q.mu.Unlock()
+		return
+	}
+	q.cancelled.Store(true)
+	close(q.cancelCh)
+	q.cond.Broadcast()
+	q.mu.Unlock()
+	slog.Info("AnalysisQueue: cancelled, waiters woken")
+}
+
+// resetCancelLocked re-arms the queue for a new analysis session.
+// Must be called with q.mu held.
+func (q *AnalysisQueue) resetCancelLocked() {
+	if !q.cancelled.Load() {
+		return
+	}
+	q.cancelled.Store(false)
+	q.cancelCh = make(chan struct{})
+}
+
 func (q *AnalysisQueue) Push(index int, priority int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if q.isClosed {
+	if q.isClosed || q.cancelled.Load() {
 		return
 	}
 
@@ -139,11 +170,11 @@ func (q *AnalysisQueue) Pop() (index int, priority int, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	for len(q.pq) == 0 && !q.isClosed {
+	for len(q.pq) == 0 && !q.isClosed && !q.cancelled.Load() {
 		q.cond.Wait()
 	}
 
-	if len(q.pq) == 0 {
+	if len(q.pq) == 0 || q.cancelled.Load() {
 		return 0, 0, false
 	}
 
@@ -159,10 +190,10 @@ func (q *AnalysisQueue) PopWithTierPreference(preferred []queueTier) (index int,
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	for len(q.pq) == 0 && !q.isClosed {
+	for len(q.pq) == 0 && !q.isClosed && !q.cancelled.Load() {
 		q.cond.Wait()
 	}
-	if len(q.pq) == 0 {
+	if len(q.pq) == 0 || q.cancelled.Load() {
 		return 0, 0, false
 	}
 
@@ -295,4 +326,5 @@ func (q *AnalysisQueue) Reset() {
 	q.set = make(map[int]*Item)
 	q.buckets = make(map[int][]*Item)
 	heap.Init(&q.pq)
+	q.resetCancelLocked()
 }

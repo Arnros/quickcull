@@ -113,3 +113,36 @@ wails build -tags webkit2gtk_4_1 -ldflags "-s -w"
 ## 📄 License
 
 MIT - Built with ❤️ for photographers.
+
+---
+
+## 🔮 Planned Improvements (Photographer Perspective)
+
+Quickcull is a **culling tool first** — fast triage before you move to your editor. Areas where the pipeline can evolve for professional workflows:
+
+### Color Management (ICC Profiles)
+- **Current**: Thumbnails and converted previews are decoded without ICC profile awareness. Images in Adobe RGB or ProPhoto RGB color spaces may appear desaturated or with wrong tones.
+- **Plan**: Embed output-referred profiles (sRGB) in generated thumbnails and adopt a color-aware decoding pipeline for wide-gamut originals.
+
+### EXIF & Metadata Completeness
+- **Missing fields**: GPS coordinates (latitude, longitude, altitude), lens model (`LensModel`), and full camera make+model are not extracted.
+- **Missing formats**: IPTC/XMP sidecar files (`.xmp`, Photo Mechanic ratings/labels) are not read.
+- **Plan**: Extend `EXIFInfo` to include GPS, lens, and XMP sidecar support.
+
+### RAW Format Coverage
+- **Current**: Supports 13 RAW extensions but missing Sony `.sr2`, Phase One `.iiq`, Hasselblad `.3fr/.fff`, Sigma `.x3f`, Canon `.crw`, GoPro `.gpr`, Epson `.erf`, and modern formats AVIF (`.avif`) and JPEG XL (`.jxl`).
+- **Plan**: Add missing extensions to the scanner and handle them through the existing exiftool-backed preview pipeline.
+
+### Rotation Safety
+- **Current**: `Apply Rotation` (`W` key) writes EXIF orientation directly via `exiftool -overwrite_original`, modifying the original file with no backup. Tags could be lost if exiftool encounters an unsupported EXIF structure.
+- **Plan**: Add an optional backup step (`_original` copy) before writing, and warn the user when a rotation commit is about to modify originals.
+
+### Thumbnail & Preview Quality
+- **Current**: Thumbnails use the `Box` filter (fastest, lowest quality) at 240px fixed. No sharpening pass. No 2× variant for HiDPI displays.
+- **Plan**: Offer `Lanczos` resampling, optional unsharp mask, and 2× thumbnail variants for Retina screens.
+
+### Culling Metrics
+- **Current**: No culling-rate counter (images/hour) visible in the UI.
+- **Plan**: Add a session-timer and rate indicator to help photographers pace long culling sessions.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.

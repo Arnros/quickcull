@@ -21,8 +21,18 @@ import (
 )
 
 const (
-	extractTimeout = 15 * time.Second
-	readyPrefix    = "{ready"
+	extractTimeout  = 15 * time.Second
+	readyPrefix     = "{ready"
+	maxArgLineBytes = 4096
+)
+
+// closeTimeout bounds how long Session.Close waits for the exiftool process to
+// exit before killing it. Declared as a var (rather than a const) so tests can
+// shorten it to avoid waiting 5s on the kill path.
+var closeTimeout = 5 * time.Second
+
+var (
+	ErrInvalidPath = errors.New("invalid exiftool path argument")
 )
 
 type Session struct {
@@ -69,9 +79,24 @@ func (s *Session) Close() error {
 	s.active = false
 	stdin := s.stdin
 	s.mu.Unlock()
-	_, _ = fmt.Fprintln(stdin, "-stay_open\nFalse")
+
+	_, _ = fmt.Fprint(stdin, "-stay_open\nFalse\n")
 	_ = stdin.Close()
-	_ = s.cmd.Wait()
+
+	// Wait for the process to exit, but do not block forever.
+	done := make(chan struct{})
+	go func() {
+		_ = s.cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(closeTimeout):
+		if s.cmd != nil && s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		<-done
+	}
 	return nil
 }
 
@@ -165,7 +190,13 @@ func AcquireSession(ctx context.Context) (*Session, error) {
 		sessionPool = sessionPool[:len(sessionPool)-1]
 		return s, nil
 	}
-	return NewSession()
+	s, err := NewSession()
+	if err != nil {
+		// Return the acquired token so the pool does not shrink permanently.
+		poolSem <- struct{}{}
+		return nil, err
+	}
+	return s, nil
 }
 
 func ReleaseSession(s *Session) {
@@ -249,6 +280,9 @@ func ExiftoolSignature() string {
 }
 
 func ExtractThumbnail(src, dst string) error {
+	if err := validatePathArg(src); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), extractTimeout)
 	defer cancel()
 	session, err := AcquireSession(ctx)
@@ -266,12 +300,30 @@ func ExtractThumbnail(src, dst string) error {
 	return errors.New("no preview")
 }
 
+// looksLikeJPEG reports whether data starts with the JPEG SOI marker.
 func looksLikeJPEG(data []byte) bool {
 	if len(data) < 4 {
 		return false
 	}
-	// JPEG SOI marker 0xFFD8
 	return data[0] == 0xFF && data[1] == 0xD8
+}
+
+// validatePathArg rejects paths that could be interpreted as exiftool options
+// or split into multiple commands. It returns ErrInvalidPath for unsafe inputs.
+func validatePathArg(path string) error {
+	if path == "" {
+		return fmt.Errorf("%w: empty path", ErrInvalidPath)
+	}
+	if strings.ContainsRune(path, '\n') || strings.ContainsRune(path, '\r') {
+		return fmt.Errorf("%w: path contains newline", ErrInvalidPath)
+	}
+	if strings.HasPrefix(path, "-") {
+		return fmt.Errorf("%w: path starts with '-'", ErrInvalidPath)
+	}
+	if len(path) > maxArgLineBytes {
+		return fmt.Errorf("%w: path too long", ErrInvalidPath)
+	}
+	return nil
 }
 
 type Metadata struct {
@@ -280,6 +332,9 @@ type Metadata struct {
 }
 
 func ExtractMetadata(path string) (*Metadata, error) {
+	if err := validatePathArg(path); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), extractTimeout)
 	defer cancel()
 	session, err := AcquireSession(ctx)
