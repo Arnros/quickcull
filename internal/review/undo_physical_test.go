@@ -254,3 +254,101 @@ func TestUndoPhysicalTrashRestoration(t *testing.T) {
 		t.Errorf("Expected state to have 1 file after Undo, got %d", state.Len())
 	}
 }
+
+// TestUndo_MixedBatchStructuralRestores verifies that undoing a mixed batch
+// (trash + star + label) restores everything: physical files back to root,
+// stars cleared, labels cleared. Uses app.Undo() (the public API) to verify
+// UndoResponse correctness, not just srv.applyEvent().
+func TestUndo_MixedBatchStructuralRestores(t *testing.T) {
+	root, app, cleanup := setupPhysicalTest(t)
+	defer cleanup()
+
+	photoIDs := []string{"a.jpg", "b.jpg", "c.jpg"}
+
+	// 1. Physically trash c.jpg before recording the batch event
+	state := app.server.getState()
+	cIdx := state.FindIndex(photoIDs[2])
+	if cIdx < 0 {
+		t.Fatalf("%s not found in state", photoIDs[2])
+	}
+	if _, err := state.TrashMultiplePaths([]string{photoIDs[2]}); err != nil {
+		t.Fatalf("TrashMultiplePaths: %v", err)
+	}
+
+	// 2. Apply a mixed batch event (trash c.jpg, star a.jpg, label b.jpg=3)
+	batchEv := bus.Event{
+		Type: bus.TypeCommandBatch,
+		Payload: bus.CommandBatchPayload{Events: []bus.Event{
+			{Type: bus.TypeCommandTrashPhoto, Payload: bus.CommandTrashPhotoPayload{
+				PhotoID: photoIDs[2], OriginalIndex: cIdx,
+			}},
+			{Type: bus.TypeCommandToggleStar, Payload: bus.CommandToggleStarPayload{
+				PhotoID: photoIDs[0], Starred: true, OldStarred: false,
+			}},
+			{Type: bus.TypeCommandLabelPhoto, Payload: bus.CommandLabelPhotoPayload{
+				PhotoID: photoIDs[1], Label: 3,
+			}},
+		}},
+	}
+	if applied, _, err := app.server.applyEvent(batchEv); err != nil || !applied {
+		t.Fatalf("mixed batch event: applied=%v err=%v", applied, err)
+	}
+
+	// Sanity: c.jpg is gone from active state, a.jpg starred, b.jpg labeled
+	if app.server.getState().FindIndex(photoIDs[2]) >= 0 {
+		t.Fatal("c.jpg should be absent after batch trash")
+	}
+	if !app.server.appState.Photos[photoIDs[0]].IsStarred {
+		t.Fatal("a.jpg should be starred")
+	}
+	if app.server.appState.Photos[photoIDs[1]].Label != 3 {
+		t.Fatal("b.jpg should have label 3")
+	}
+
+	// 3. Undo via the public App API (not srv.applyEvent)
+	resp, err := app.Undo()
+	if err != nil {
+		t.Fatalf("first Undo: %v", err)
+	}
+
+	// 4. Verify UndoResponse fields
+	if resp.ActionType == "" {
+		t.Error("UndoResponse.ActionType should not be empty")
+	}
+	if resp.Index < 0 {
+		t.Error("UndoResponse.Index should be >= 0")
+	}
+
+	// 5. All three files must be present in active state
+	if app.server.getState().Len() != 3 {
+		t.Errorf("want 3 files after undo, got %d", app.server.getState().Len())
+	}
+	for _, name := range photoIDs {
+		if idx := app.server.getState().FindIndex(name); idx < 0 {
+			t.Errorf("%s missing from state after undo", name)
+		}
+	}
+
+	// 6. Physical restoration: c.jpg must be back in root, not in .trash
+	trashRoot := filepath.Join(root, domain.DirTrash)
+	cPath := filepath.Join(root, photoIDs[2])
+	if _, err := os.Stat(cPath); os.IsNotExist(err) {
+		t.Errorf("%s: file missing from root after undo", photoIDs[2])
+	}
+	if _, err := os.Stat(filepath.Join(trashRoot, photoIDs[2])); err == nil {
+		t.Errorf("%s: still in .trash after undo", photoIDs[2])
+	}
+
+	// 7. Metadata rolled back: star undone, label undone
+	if app.server.appState.Photos[photoIDs[0]].IsStarred {
+		t.Errorf("%s: star should be cleared after undo", photoIDs[0])
+	}
+	if app.server.appState.Photos[photoIDs[1]].Label != 0 {
+		t.Errorf("%s: label should be 0 after undo, got %d", photoIDs[1], app.server.appState.Photos[photoIDs[1]].Label)
+	}
+
+	// 8. Second Undo must return ErrNothingToUndo (only one action in history)
+	if _, err := app.Undo(); err != domain.ErrNothingToUndo {
+		t.Errorf("second Undo: want ErrNothingToUndo, got %v", err)
+	}
+}
