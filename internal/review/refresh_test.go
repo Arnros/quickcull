@@ -211,10 +211,16 @@ func TestRefresh_LargeLibraryUsesChunkedProtocol(t *testing.T) {
 
 	var mu sync.Mutex
 	var syncStates []AppStateDTO
+	var photoChunks int
 	srv.SetBroadcastHook(func(name string, data any) {
 		if name == eventSyncState {
 			mu.Lock()
 			syncStates = append(syncStates, data.(AppStateDTO))
+			mu.Unlock()
+		}
+		if name == "sync:state:photos" {
+			mu.Lock()
+			photoChunks++
 			mu.Unlock()
 		}
 	})
@@ -222,6 +228,7 @@ func TestRefresh_LargeLibraryUsesChunkedProtocol(t *testing.T) {
 	// Drain LoadState events.
 	mu.Lock()
 	before := len(syncStates)
+	beforeChunks := photoChunks
 	mu.Unlock()
 
 	srv.ReconcileScannedFiles(largeFiles)
@@ -229,12 +236,16 @@ func TestRefresh_LargeLibraryUsesChunkedProtocol(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	afterReconcile := syncStates[before:]
+	reconcileChunks := photoChunks - beforeChunks
 	// Chunked delivery emits at least one partial SyncState (the base).
 	if len(afterReconcile) == 0 {
 		t.Fatal("expected SyncState after large-library reconcile")
 	}
 	if !afterReconcile[0].IsPartial {
 		t.Fatal("large library refresh must emit partial SyncState for chunked delivery")
+	}
+	if reconcileChunks < 2 {
+		t.Fatalf("expected at least 2 sync:state:photos chunks (5001 photos / 5000 chunk size), got %d", reconcileChunks)
 	}
 }
 
@@ -292,7 +303,7 @@ func TestRefresh_ScanFailurePreservesAppState(t *testing.T) {
 	}
 }
 
-func TestRefresh_ConcurrentCallsDoNotCorruptState(t *testing.T) {
+func TestRefresh_SequentialCallsDoNotCorruptState(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"a.jpg", "b.jpg"} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte("jpeg"), 0o644); err != nil {

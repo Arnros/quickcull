@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, waitFor } from '@testing-library/svelte';
 import { FILTER_MODES } from './constants';
 
 const { handlers, updateFilteredIndices } = vi.hoisted(() => ({
@@ -542,15 +542,18 @@ describe('SyncDelta label reactivity in component rendering', () => {
   it('displays label badge after SyncDelta triggers reactive update', async () => {
     const { default: LabelIndicator } = await import('./components/LabelIndicator.test.svelte');
 
-    const initialPhotos = { 'a.jpg': { Label: 0 } };
-    const { rerender } = render(LabelIndicator, { props: { photos: initialPhotos } as any });
+    const initialPhotos = {
+      'a.jpg': { ID: 'a.jpg', Label: 0, IsStarred: false, Rotation: 0, IsTrashed: false },
+    };
+    render(LabelIndicator, { props: { initialPhotos } as any });
 
     expect(screen.queryByTestId('label-badge')).toBeNull();
 
-    const updatedPhotos = { 'a.jpg': { Label: 1 } };
-    await rerender({ photos: updatedPhotos } as any);
+    handlers.SyncDelta?.({ PhotoID: 'a.jpg', Changes: { Label: 1 } });
 
-    expect(screen.getByTestId('label-badge')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId('label-badge')).toBeTruthy();
+    });
     expect(screen.getByTestId('label-badge').textContent).toBe('1');
   });
 });
