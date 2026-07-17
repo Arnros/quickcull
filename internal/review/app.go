@@ -14,15 +14,17 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
-	ctx     context.Context
-	server  *Server
-	loading atomic.Bool
+	ctx       context.Context
+	server    *Server
+	loading   atomic.Bool
+	refreshMu sync.Mutex
 }
 
 // NewApp creates a new App struct
@@ -484,6 +486,9 @@ func (a *App) RevealInExplorer(index int) error {
 
 // Refresh rescans the current folder
 func (a *App) Refresh(currentIndex int) (ActionResponse, error) {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+
 	state := a.server.getState()
 	if state == nil {
 		return ActionResponse{}, domain.ErrFolderNotFound
@@ -503,6 +508,18 @@ func (a *App) Refresh(currentIndex int) (ActionResponse, error) {
 		return ActionResponse{}, newScanError(scanOpRefresh, state.Root(), err)
 	}
 	sort.Strings(newFiles)
+
+	if currentState := a.server.getState(); currentState != state {
+		newTotal := 0
+		newIndex := -1
+		if currentState != nil {
+			newTotal = currentState.Len()
+			if newTotal > 0 {
+				newIndex = min(max(currentIndex, 0), newTotal-1)
+			}
+		}
+		return ActionResponse{Stats: a.snapshotStats(), Total: newTotal, Index: newIndex}, nil
+	}
 
 	var curRel string
 	if rel, err := state.Get(currentIndex); err == nil {

@@ -8,7 +8,9 @@ import (
 	"quickcull/internal/bus"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRefreshReconcilesAndBroadcastsAuthoritativeAppState(t *testing.T) {
@@ -212,6 +214,8 @@ func TestRefresh_LargeLibraryUsesChunkedProtocol(t *testing.T) {
 	var mu sync.Mutex
 	var syncStates []AppStateDTO
 	var photoChunks int
+	chunkPhotoIDs := make(map[string]struct{}, len(largeFiles))
+	var chunkTotals []int
 	srv.SetBroadcastHook(func(name string, data any) {
 		if name == eventSyncState {
 			mu.Lock()
@@ -221,6 +225,11 @@ func TestRefresh_LargeLibraryUsesChunkedProtocol(t *testing.T) {
 		if name == "sync:state:photos" {
 			mu.Lock()
 			photoChunks++
+			payload := data.(map[string]any)
+			for id := range payload["photos"].(map[string]Photo) {
+				chunkPhotoIDs[id] = struct{}{}
+			}
+			chunkTotals = append(chunkTotals, payload["total"].(int))
 			mu.Unlock()
 		}
 	})
@@ -246,6 +255,17 @@ func TestRefresh_LargeLibraryUsesChunkedProtocol(t *testing.T) {
 	}
 	if reconcileChunks < 2 {
 		t.Fatalf("expected at least 2 sync:state:photos chunks (5001 photos / 5000 chunk size), got %d", reconcileChunks)
+	}
+	if len(chunkPhotoIDs) != len(largeFiles) {
+		t.Fatalf("chunked photo count = %d, want %d", len(chunkPhotoIDs), len(largeFiles))
+	}
+	if _, stale := chunkPhotoIDs["a.jpg"]; stale {
+		t.Fatal("chunked delivery retained photo absent from reconciled order")
+	}
+	for _, total := range chunkTotals {
+		if total != len(largeFiles) {
+			t.Fatalf("chunk total = %d, want %d", total, len(largeFiles))
+		}
 	}
 }
 
@@ -362,5 +382,85 @@ func TestRefresh_SequentialCallsDoNotCorruptState(t *testing.T) {
 	}
 	if !slices.Equal(srv.appState.VisibleOrder, []string{"a.jpg", "c.jpg"}) {
 		t.Fatalf("VisibleOrder = %v", srv.appState.VisibleOrder)
+	}
+}
+
+func TestRefreshSerializesConcurrentScans(t *testing.T) {
+	root := t.TempDir()
+	srv := NewServer()
+	srv.state = NewState(root, []string{"a.jpg"})
+	srv.appState = &AppState{Root: root, Photos: map[string]Photo{"a.jpg": {ID: "a.jpg"}}, VisibleOrder: []string{"a.jpg"}}
+	app := &App{server: srv}
+
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var active atomic.Int32
+	setScanFilesForTest(t, func(_ string, filesChan chan<- string) error {
+		active.Add(1)
+		entered <- struct{}{}
+		<-release
+		active.Add(-1)
+		filesChan <- "a.jpg"
+		close(filesChan)
+		return nil
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _, _ = app.Refresh(0) }()
+	<-entered
+	go func() { defer wg.Done(); _, _ = app.Refresh(0) }()
+
+	select {
+	case <-entered:
+		close(release)
+		wg.Wait()
+		t.Fatalf("refresh scans overlapped; active=%d", active.Load())
+	case <-time.After(100 * time.Millisecond):
+		close(release)
+		wg.Wait()
+	}
+}
+
+func TestRefreshDiscardsScanWhenFolderChanges(t *testing.T) {
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	srv := NewServer()
+	oldState := NewState(oldRoot, []string{"old.jpg"})
+	srv.state = oldState
+	srv.appState = &AppState{Root: oldRoot, Photos: map[string]Photo{"old.jpg": {ID: "old.jpg"}}, VisibleOrder: []string{"old.jpg"}}
+	app := &App{server: srv}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	setScanFilesForTest(t, func(_ string, filesChan chan<- string) error {
+		close(entered)
+		<-release
+		filesChan <- "stale.jpg"
+		close(filesChan)
+		return nil
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = app.Refresh(0)
+	}()
+	<-entered
+
+	newState := NewState(newRoot, []string{"new.jpg"})
+	srv.stateMu.Lock()
+	srv.state = newState
+	srv.stateMu.Unlock()
+	srv.appStateMu.Lock()
+	srv.appState = &AppState{Root: newRoot, Photos: map[string]Photo{"new.jpg": {ID: "new.jpg"}}, VisibleOrder: []string{"new.jpg"}}
+	srv.appStateMu.Unlock()
+	close(release)
+	<-done
+
+	srv.appStateMu.RLock()
+	defer srv.appStateMu.RUnlock()
+	if srv.appState.Root != newRoot || !slices.Equal(srv.appState.VisibleOrder, []string{"new.jpg"}) {
+		t.Fatalf("stale scan overwrote new folder state: %+v", srv.appState)
 	}
 }

@@ -492,6 +492,14 @@ func (s *State) TrashedCount() int {
 	return s.trashedCount
 }
 
+// SnapshotVisibleState returns an isolated visible order and trash count from
+// one read-lock acquisition.
+func (s *State) SnapshotVisibleState() ([]string, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]string(nil), s.files...), s.trashedCount
+}
+
 // FileSize returns the size in bytes of the file at the given index.
 func (s *State) FileSize(index int) (int64, error) {
 	s.mu.RLock()

@@ -63,6 +63,14 @@ class WatchService {
         appState.stats = res.stats;
       }
 
+      if ((res.total ?? 0) === 0 || (res.index ?? -1) < 0) {
+        this.stableTicks = 0;
+        appState.sessionVersion = Date.now();
+        appState.currentFile = null;
+        appState.currentIndex = 0;
+        return;
+      }
+
       const totalChanged = res.total !== beforeTotal;
       // If backend returns -1, it means it couldn't find our current file identity.
       // We should stay on our current index and NOT trigger a reload.

@@ -6,9 +6,26 @@ import (
 	"testing"
 )
 
+func TestStateSnapshotVisibleStateReturnsIsolatedOrderAndTrashCount(t *testing.T) {
+	state := NewState("/tmp", []string{"a.jpg", "b.jpg"})
+	state.mu.Lock()
+	state.trashedCount = 3
+	state.mu.Unlock()
+
+	order, trashed := state.SnapshotVisibleState()
+	order[0] = "changed.jpg"
+
+	if trashed != 3 {
+		t.Fatalf("trashed = %d, want 3", trashed)
+	}
+	if got, err := state.Get(0); err != nil || got != "a.jpg" {
+		t.Fatalf("snapshot mutated state: got %q, err %v", got, err)
+	}
+}
+
 func TestSyncLargeLibraryProtocol(t *testing.T) {
 	srv := NewServer()
-	
+
 	// Create a state with 5001 photos to trigger "large library" mode
 	photoCount := 5001
 	files := make([]string, photoCount)
@@ -18,13 +35,13 @@ func TestSyncLargeLibraryProtocol(t *testing.T) {
 		files[i] = name
 		photos[name] = Photo{ID: name}
 	}
-	
+
 	appState := &AppState{
 		Root:         "/tmp",
 		VisibleOrder: files,
 		Photos:       photos,
 	}
-	
+
 	srv.appStateMu.Lock()
 	srv.appState = appState
 	srv.appStateMu.Unlock()
@@ -53,7 +70,7 @@ func TestSyncLargeLibraryProtocol(t *testing.T) {
 	srv.SyncFullState()
 
 	// Wait for async events if any (though SyncFullState is synchronous in its broadcast calls)
-	
+
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -61,17 +78,17 @@ func TestSyncLargeLibraryProtocol(t *testing.T) {
 	if len(events) < 2 {
 		t.Fatalf("Expected at least 2 events, got %d: %v", len(events), events)
 	}
-	
+
 	// 2. Verify large library suppression
 	// The final SyncState should have an empty Photos map
 	if syncCount < 2 {
 		t.Fatalf("Expected at least 2 SyncState events (bootstrap + final), got %d", syncCount)
 	}
-	
+
 	if len(finalPhotos) != 0 {
 		t.Errorf("Expected final SyncState to have 0 photos for large library, got %d", len(finalPhotos))
 	}
-	
+
 	// 3. Verify chunks were sent
 	foundChunks := false
 	for _, e := range events {
@@ -93,7 +110,7 @@ func TestSyncLargeLibraryProtocol(t *testing.T) {
 
 func TestSyncSmallLibraryProtocol(t *testing.T) {
 	srv := NewServer()
-	
+
 	// Small library
 	photoCount := 10
 	files := make([]string, photoCount)
@@ -103,13 +120,13 @@ func TestSyncSmallLibraryProtocol(t *testing.T) {
 		files[i] = name
 		photos[name] = Photo{ID: name}
 	}
-	
+
 	appState := &AppState{
 		Root:         "/tmp",
 		VisibleOrder: files,
 		Photos:       photos,
 	}
-	
+
 	srv.appStateMu.Lock()
 	srv.appState = appState
 	srv.appStateMu.Unlock()
@@ -141,14 +158,14 @@ func TestSyncSmallLibraryProtocol(t *testing.T) {
 
 func TestSyncEmptyFolderProtocol(t *testing.T) {
 	srv := NewServer()
-	
+
 	// Empty state
 	appState := &AppState{
 		Root:         "/tmp/empty",
 		VisibleOrder: []string{},
 		Photos:       make(map[string]Photo),
 	}
-	
+
 	srv.appStateMu.Lock()
 	srv.appState = appState
 	srv.appStateMu.Unlock()
@@ -186,7 +203,7 @@ func TestSyncEmptyFolderProtocol(t *testing.T) {
 
 func TestSyncStructuralUpdateProtocol(t *testing.T) {
 	srv := NewServer()
-	
+
 	// Normal library
 	photoCount := 10
 	files := make([]string, photoCount)
@@ -196,13 +213,13 @@ func TestSyncStructuralUpdateProtocol(t *testing.T) {
 		files[i] = name
 		photos[name] = Photo{ID: name}
 	}
-	
+
 	appState := &AppState{
 		Root:         "/tmp",
 		VisibleOrder: files,
 		Photos:       photos,
 	}
-	
+
 	srv.appStateMu.Lock()
 	srv.appState = appState
 	srv.appStateMu.Unlock()
@@ -229,7 +246,7 @@ func TestSyncStructuralUpdateProtocol(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	
+
 	if !isPartial {
 		t.Errorf("Expected IsPartial to be true for structural update (photos omitted)")
 	}

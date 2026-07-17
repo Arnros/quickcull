@@ -117,9 +117,7 @@ func (s *Server) RefreshVisibleOrder() {
 		return
 	}
 
-	// Lock Ordering: stateMu -> appStateMu
-	state.mu.RLock()
-	defer state.mu.RUnlock()
+	visibleOrder, trashedCount := state.SnapshotVisibleState()
 
 	s.appStateMu.Lock()
 	defer s.appStateMu.Unlock()
@@ -129,9 +127,8 @@ func (s *Server) RefreshVisibleOrder() {
 	}
 
 	next := s.appState.Clone(true)
-	next.VisibleOrder = make([]string, len(state.files))
-	copy(next.VisibleOrder, state.files)
-	next.TrashedCount = state.TrashedCount()
+	next.VisibleOrder = visibleOrder
+	next.TrashedCount = trashedCount
 
 	s.appState = &next
 

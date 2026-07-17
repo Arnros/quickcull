@@ -1,14 +1,16 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { syncService } from '../syncService.svelte';
 
   let { initialPhotos = {} as Record<string, { Label: number; ID?: string; IsStarred?: boolean; Rotation?: number; IsTrashed?: boolean }> } = $props();
+  const startingPhotos = untrack(() => initialPhotos);
 
   let appState = $state({
     v2: {
       Root: '/media',
       CacheDir: '',
-      VisibleOrder: Object.keys(initialPhotos),
-      Photos: { ...initialPhotos },
+      VisibleOrder: Object.keys(startingPhotos),
+      Photos: { ...startingPhotos },
       TrashedCount: 0,
       StarredCount: 0,
       LabeledCount: 0,
