@@ -135,7 +135,7 @@ func TestMoveExportPreservesMetadataInDestinationFolder(t *testing.T) {
 	}
 }
 
-func TestPartialMoveRefreshReconcilesSuccessfulFiles(t *testing.T) {
+func TestStaleFileReferenceReconciledDuringMove(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"a.jpg", "b.jpg"} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte("jpeg"), 0o644); err != nil {
@@ -191,5 +191,103 @@ func TestPartialMoveRefreshReconcilesSuccessfulFiles(t *testing.T) {
 	}
 	if len(snapshots) != 1 || len(snapshots[0].Photos) != 0 {
 		t.Fatalf("refresh did not clear source state: %+v", snapshots)
+	}
+}
+
+func TestPartialMoveFailedFileRemainsAtSource(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.jpg", "b.jpg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("jpeg"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dest := t.TempDir()
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{server: srv}
+
+	// Apply metadata before the failed move to verify it is preserved.
+	if _, _, err := srv.applyEvent(bus.Event{
+		Type:    bus.TypeCommandLabelPhoto,
+		Payload: bus.CommandLabelPhotoPayload{PhotoID: "b.jpg", Label: 3},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// resolveExportDest renames b.jpg → b_copy.jpg when a collision exists.
+	// Pre-create b.jpg as a regular file (triggers rename) and b_copy.jpg
+	// as a directory so os.Rename fails with ENOTDIR.  The copy fallback
+	// also fails, leaving b.jpg at the source.
+	if err := os.WriteFile(filepath.Join(dest, "b.jpg"), []byte("block"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dest, "b_copy.jpg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var eventsMu sync.Mutex
+	var events []string
+	var snapshots []AppStateDTO
+	srv.SetBroadcastHook(func(name string, data any) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, name)
+		if name == eventSyncState {
+			snapshots = append(snapshots, data.(AppStateDTO))
+		}
+	})
+
+	if err := srv.ExportFilesPaths([]string{"a.jpg", "b.jpg"}, dest, true); err != nil {
+		t.Fatal(err)
+	}
+	waitForExport(t, srv)
+
+	// a.jpg moved successfully.
+	if _, err := os.Stat(filepath.Join(dest, "a.jpg")); err != nil {
+		t.Fatalf("successful move missing from destination: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.jpg")); !os.IsNotExist(err) {
+		t.Fatal("successful move still present at source")
+	}
+
+	// b.jpg move failed: source preserved with original content.
+	if _, err := os.Stat(filepath.Join(root, "b.jpg")); err != nil {
+		t.Fatalf("failed move removed source file: %v", err)
+	}
+	bContent, _ := os.ReadFile(filepath.Join(root, "b.jpg"))
+	if string(bContent) != "jpeg" {
+		t.Fatal("source content modified, move may have partially succeeded")
+	}
+
+	res, err := app.Refresh(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 1 {
+		t.Fatalf("source total = %d, want 1 (b.jpg preserved)", res.Total)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	if len(snapshots) != 1 {
+		t.Fatalf("expected one SyncState, got %d", len(snapshots))
+	}
+	got := snapshots[0]
+	if !slices.Equal(got.VisibleOrder, []string{"b.jpg"}) {
+		t.Fatalf("VisibleOrder = %v, want [b.jpg]", got.VisibleOrder)
+	}
+	if _, ok := got.Photos["b.jpg"]; !ok {
+		t.Fatal("preserved file missing from authoritative state")
+	}
+	if p := got.Photos["b.jpg"]; p.Label != 3 {
+		t.Fatalf("preserved photo lost its label: got %d, want 3", p.Label)
+	}
+	if got.LabeledCount != 1 {
+		t.Fatalf("labeled count = %d, want 1", got.LabeledCount)
+	}
+	if _, ok := got.Photos["a.jpg"]; ok {
+		t.Fatal("moved file still in authoritative state")
 	}
 }

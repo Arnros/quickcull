@@ -1,9 +1,11 @@
 import { defineConfig } from 'vitest/config'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 
-// https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [svelte()],
+  resolve: {
+    conditions: mode === 'test' ? ['browser'] : [],
+  },
   test: {
     environment: 'jsdom',
     globals: true,
@@ -13,4 +15,4 @@ export default defineConfig({
     outDir: '../internal/frontendassets/webdist/dist',
     emptyOutDir: true,
   }
-})
+}))

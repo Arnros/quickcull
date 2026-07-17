@@ -1,10 +1,13 @@
 package review
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"quickcull/internal/bus"
 	"slices"
+	"sync"
 	"testing"
 )
 
@@ -188,4 +191,165 @@ func waitForRefreshTotal(t *testing.T, app *App, index int, expected int) Action
 	}
 	t.Fatalf("refresh did not converge to expected total %d", expected)
 	return ActionResponse{}
+}
+
+func TestRefresh_LargeLibraryUsesChunkedProtocol(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.jpg"), []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer()
+	srv.cacheDir = t.TempDir()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+
+	largeFiles := make([]string, largeLibraryThreshold+1)
+	for i := range largeFiles {
+		largeFiles[i] = fmt.Sprintf("photo_%d.jpg", i)
+	}
+
+	var mu sync.Mutex
+	var syncStates []AppStateDTO
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == eventSyncState {
+			mu.Lock()
+			syncStates = append(syncStates, data.(AppStateDTO))
+			mu.Unlock()
+		}
+	})
+
+	// Drain LoadState events.
+	mu.Lock()
+	before := len(syncStates)
+	mu.Unlock()
+
+	srv.ReconcileScannedFiles(largeFiles)
+
+	mu.Lock()
+	defer mu.Unlock()
+	afterReconcile := syncStates[before:]
+	// Chunked delivery emits at least one partial SyncState (the base).
+	if len(afterReconcile) == 0 {
+		t.Fatal("expected SyncState after large-library reconcile")
+	}
+	if !afterReconcile[0].IsPartial {
+		t.Fatal("large library refresh must emit partial SyncState for chunked delivery")
+	}
+}
+
+func TestRefresh_ScanFailurePreservesAppState(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.jpg"), []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{server: srv}
+
+	// Label a.jpg before the failing scan.
+	if _, _, err := srv.applyEvent(bus.Event{
+		Type:    bus.TypeCommandLabelPhoto,
+		Payload: bus.CommandLabelPhotoPayload{PhotoID: "a.jpg", Label: 5},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	scanErr := errors.New("simulated scan failure")
+	setScanFilesForTest(t, func(_ string, filesChan chan<- string) error {
+		close(filesChan)
+		return scanErr
+	})
+
+	var snapshots []AppStateDTO
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == eventSyncState {
+			snapshots = append(snapshots, data.(AppStateDTO))
+		}
+	})
+
+	_, err := app.Refresh(0)
+	if err == nil {
+		t.Fatal("expected scan error, got nil")
+	}
+
+	// No SyncState emitted.
+	if len(snapshots) != 0 {
+		t.Fatalf("expected no SyncState after scan failure, got %d", len(snapshots))
+	}
+
+	// AppState must be unchanged.
+	srv.appStateMu.RLock()
+	defer srv.appStateMu.RUnlock()
+	if srv.appState == nil {
+		t.Fatal("appState was destroyed")
+	}
+	if p, ok := srv.appState.Photos["a.jpg"]; !ok || p.Label != 5 {
+		t.Fatalf("appState corrupted: photo=%+v", p)
+	}
+}
+
+func TestRefresh_ConcurrentCallsDoNotCorruptState(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.jpg", "b.jpg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("jpeg"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{server: srv}
+
+	// Remove b.jpg externally to simulate a folder change between refreshes.
+	if err := os.Remove(filepath.Join(root, "b.jpg")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two sequential refreshes: the second must see the updated filesystem.
+	res1, err := app.Refresh(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res1.Total != 1 {
+		t.Fatalf("first refresh total = %d, want 1", res1.Total)
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "c.jpg"), []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res2, err := app.Refresh(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Total != 2 {
+		t.Fatalf("second refresh total = %d, want 2", res2.Total)
+	}
+
+	// Final state must be self-consistent.
+	srv.appStateMu.RLock()
+	defer srv.appStateMu.RUnlock()
+	if srv.appState == nil {
+		t.Fatal("appState was destroyed after refreshes")
+	}
+	photoIDs := make(map[string]bool, len(srv.appState.Photos))
+	for id := range srv.appState.Photos {
+		photoIDs[id] = true
+	}
+	for _, id := range srv.appState.VisibleOrder {
+		if !photoIDs[id] {
+			t.Fatalf("VisibleOrder[%s] missing from Photos", id)
+		}
+	}
+	if len(srv.appState.VisibleOrder) != len(srv.appState.Photos) {
+		t.Fatalf("VisibleOrder len %d != Photos len %d", len(srv.appState.VisibleOrder), len(srv.appState.Photos))
+	}
+	if !slices.Equal(srv.appState.VisibleOrder, []string{"a.jpg", "c.jpg"}) {
+		t.Fatalf("VisibleOrder = %v", srv.appState.VisibleOrder)
+	}
 }

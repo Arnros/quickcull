@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/svelte';
 import { FILTER_MODES } from './constants';
 
 const { handlers, updateFilteredIndices } = vi.hoisted(() => ({
@@ -153,6 +154,18 @@ describe('syncService cache busting on structural sync', () => {
 
     expect(appState.stats.starredCount).toBe(1);
     expect(appState.stats.undoLen).toBe(1);
+  });
+
+  it('ignores delta for unknown photo', () => {
+    const photo = { ID: 'a.jpg', IsStarred: false, Label: 0, Rotation: 0, IsTrashed: false };
+    const appState = makeSyncAppState({ 'a.jpg': photo }, ['a.jpg']);
+    const v2Before = appState.v2;
+    syncService.init(appState);
+
+    handlers.SyncDelta?.({ PhotoID: 'z.jpg', Changes: { Label: 1 } });
+
+    expect(appState.v2).toBe(v2Before);
+    expect(Object.keys(appState.v2.Photos)).toEqual(['a.jpg']);
   });
 
   it('increments sessionVersion on structural SyncState', async () => {
@@ -522,5 +535,22 @@ describe('syncService cache busting on structural sync', () => {
     });
 
     expect(appState.v2.Photos).toEqual({});
+  });
+});
+
+describe('SyncDelta label reactivity in component rendering', () => {
+  it('displays label badge after SyncDelta triggers reactive update', async () => {
+    const { default: LabelIndicator } = await import('./components/LabelIndicator.test.svelte');
+
+    const initialPhotos = { 'a.jpg': { Label: 0 } };
+    const { rerender } = render(LabelIndicator, { props: { photos: initialPhotos } as any });
+
+    expect(screen.queryByTestId('label-badge')).toBeNull();
+
+    const updatedPhotos = { 'a.jpg': { Label: 1 } };
+    await rerender({ photos: updatedPhotos } as any);
+
+    expect(screen.getByTestId('label-badge')).toBeTruthy();
+    expect(screen.getByTestId('label-badge').textContent).toBe('1');
   });
 });
