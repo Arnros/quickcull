@@ -79,6 +79,15 @@ func TestRefreshReconcilesAndBroadcastsAuthoritativeAppState(t *testing.T) {
 	if res.Index != 1 {
 		t.Fatalf("removed current photo should fall back to index 1, got %d", res.Index)
 	}
+	if got.StarredCount != 1 {
+		t.Fatalf("starred count = %d, want 1", got.StarredCount)
+	}
+	if got.LabeledCount != 0 {
+		t.Fatalf("labeled count = %d, want 0 (labeled photo was removed)", got.LabeledCount)
+	}
+	if got.RotatedCount != 0 {
+		t.Fatalf("rotated count = %d, want 0", got.RotatedCount)
+	}
 }
 
 func TestRefreshEmptyFolderReturnsNoIndexAndClearsState(t *testing.T) {

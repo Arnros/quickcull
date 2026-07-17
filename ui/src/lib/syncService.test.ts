@@ -121,6 +121,40 @@ describe('syncService cache busting on structural sync', () => {
     expect(Object.keys(appState.v2.Photos)).toEqual(['fresh.jpg']);
   });
 
+  it('updates currentFile metadata from structural sync', async () => {
+    const appState = makeSyncAppState({
+      'a.jpg': { ID: 'a.jpg', IsStarred: true, Label: 2, Rotation: 90, IsTrashed: false },
+    }, ['a.jpg']);
+    appState.currentFile = { filename: 'a.jpg', index: 0, label: 0, starred: false, rotation: 0 };
+    syncService.init(appState);
+
+    await handlers.SyncState?.({
+      Root: '/media', CacheDir: '', IsPartial: false,
+      VisibleOrder: ['a.jpg'],
+      Photos: { 'a.jpg': { ID: 'a.jpg', IsStarred: true, Label: 2, Rotation: 90, IsTrashed: false } },
+      TrashedCount: 0, StarredCount: 1, LabeledCount: 1, RotatedCount: 1, UndoLen: 0,
+    });
+
+    expect(appState.currentFile.starred).toBe(true);
+    expect(appState.currentFile.label).toBe(2);
+    expect(appState.currentFile.rotation).toBe(90);
+  });
+
+  it('applies _stats from delta to global counters', () => {
+    const photo = { ID: 'a.jpg', IsStarred: false, Label: 0, Rotation: 0, IsTrashed: false };
+    const appState = makeSyncAppState({ 'a.jpg': photo }, ['a.jpg']);
+    appState.stats = { total: 1, trashedCount: 0, starredCount: 0, labeledCount: 0, undoLen: 0 };
+    syncService.init(appState);
+
+    handlers.SyncDelta?.({
+      PhotoID: 'a.jpg',
+      Changes: { IsStarred: true, _stats: { starred: 1, labeled: 0, trashed: 0, undoLen: 1 } },
+    });
+
+    expect(appState.stats.starredCount).toBe(1);
+    expect(appState.stats.undoLen).toBe(1);
+  });
+
   it('increments sessionVersion on structural SyncState', async () => {
     const appState: any = {
       v2: {
