@@ -139,6 +139,49 @@ func (s *Server) RefreshVisibleOrder() {
 	s.broadcastAppState(s.appState, true, false)
 }
 
+// ReconcileScannedFiles makes the immutable application state authoritative for
+// a freshly scanned file set, preserving metadata only for photos that remain.
+func (s *Server) ReconcileScannedFiles(files []string) {
+	state := s.getState()
+	if state == nil {
+		return
+	}
+
+	// TrashedCount acquires and releases state.mu internally. Complete that read
+	// before taking appStateMu to preserve the stateMu -> appStateMu discipline.
+	trashedCount := state.TrashedCount()
+
+	s.appStateMu.Lock()
+	if s.appState == nil {
+		s.appStateMu.Unlock()
+		return
+	}
+
+	next := s.appState.Clone(false)
+	next.IsPartial = false
+	next.VisibleOrder = append([]string(nil), files...)
+	next.Photos = make(map[string]Photo, len(files))
+	for _, id := range files {
+		if photo, ok := s.appState.Photos[id]; ok {
+			next.Photos[id] = photo
+		} else {
+			next.Photos[id] = Photo{ID: id}
+		}
+	}
+	next.TrashedCount = trashedCount
+	next.RecalculateCounts()
+	s.appState = &next
+	isLarge := len(next.Photos) > largeLibraryThreshold
+	s.appStateMu.Unlock()
+
+	if isLarge {
+		s.SyncFullState()
+		return
+	}
+	snapshot := BuildSyncSnapshot(next, true)
+	s.broadcast(eventSyncState, snapshot)
+}
+
 // broadcastAppState assembles and emits a SyncState payload.
 func (s *Server) broadcastAppState(state *AppState, isPartial bool, includePhotos bool) {
 	if state == nil {

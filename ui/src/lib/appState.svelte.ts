@@ -676,8 +676,13 @@ class AppState {
       const res = await api.refresh(this.currentIndex);
       this.sessionVersion = Date.now(); // Cache buster
 
-      const targetIndex = (res?.index !== -1) ? (res?.index ?? 0) : this.currentIndex;
-      await this.loadFile(targetIndex);
+      const refreshedIndex = res?.index ?? -1;
+      if ((res?.total ?? 0) === 0 || refreshedIndex < 0) {
+        this.currentFile = null;
+        this.currentIndex = 0;
+      } else {
+        await this.loadFile(refreshedIndex);
+      }
       this.pushAction(i18n.t('action_refresh'), false);
     }, 'Refresh failed');
   }

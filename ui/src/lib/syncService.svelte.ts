@@ -78,6 +78,22 @@ function remapSelectedIndices(
   return remapped;
 }
 
+function reconcilePhotos(
+  existing: AppStateV2['Photos'] | undefined,
+  incoming: AppStateV2['Photos'] | undefined,
+  visibleOrder: string[] | undefined,
+  preserveExisting: boolean,
+): AppStateV2['Photos'] {
+  if (!preserveExisting) return { ...(incoming || {}) };
+
+  const result: AppStateV2['Photos'] = {};
+  for (const id of visibleOrder || []) {
+    const photo = incoming?.[id] ?? existing?.[id];
+    if (photo) result[id] = photo;
+  }
+  return result;
+}
+
 function hasActiveFiltering(): boolean {
   return filterState.filterMode !== 'none' || Object.keys(filterState.activeFilters).length > 0;
 }
@@ -111,10 +127,16 @@ class SyncService {
       logger.info('v2 SyncState: Base received', { orderLen: data.VisibleOrder?.length });
       const oldVisibleOrder = appState.v2?.VisibleOrder;
       const oldSelectedIndices = [...appState.selectedIndices];
+      const isSameFolder = appState.v2?.Root === data.Root;
 
       appState.v2 = {
         ...data,
-        Photos: appState.v2?.Photos || {} // Keep existing photos if any, or start empty
+        Photos: reconcilePhotos(
+          appState.v2?.Photos,
+          data.Photos,
+          data.VisibleOrder,
+          Boolean(data.IsPartial && isSameFolder),
+        ),
       };
 
       appState.selectedIndices = remapSelectedIndices(oldVisibleOrder, data.VisibleOrder, oldSelectedIndices);
@@ -165,15 +187,12 @@ class SyncService {
       const isUndoOperation = appState.lastNonUndoableAction === 'undo';
 
       const isSameFolder = oldRoot === data.Root;
-      let preservedPhotos: Record<string, any>;
-      if (data.IsPartial && isSameFolder && oldPhotos && Object.keys(oldPhotos).length > 0) {
-        preservedPhotos = { ...oldPhotos };
-        if (incomingPhotos) {
-          Object.assign(preservedPhotos, incomingPhotos);
-        }
-      } else {
-        preservedPhotos = incomingPhotos;
-      }
+      const preservedPhotos = reconcilePhotos(
+        oldPhotos,
+        incomingPhotos,
+        data.VisibleOrder,
+        Boolean(data.IsPartial && isSameFolder),
+      );
 
       appState.v2 = {
         ...data,
@@ -228,15 +247,18 @@ class SyncService {
       const changes = delta.Changes;
 
       if (appState.v2.Photos[photoID]) {
-        const p = appState.v2.Photos[photoID];
-        const starredChanged = changes.IsStarred !== undefined && changes.IsStarred !== p.IsStarred;
-
-        // Targeted mutation: only this object changes
-        Object.assign(p, changes);
+        const previous = appState.v2.Photos[photoID];
+        const { _stats, ...photoChanges } = changes;
+        const starredChanged = photoChanges.IsStarred !== undefined && photoChanges.IsStarred !== previous.IsStarred;
+        const updatedPhoto = { ...previous, ...photoChanges };
+        appState.v2 = {
+          ...appState.v2,
+          Photos: { ...appState.v2.Photos, [photoID]: updatedPhoto },
+        };
 
         // Sync stats if present in delta
-        if (changes._stats) {
-          const s = changes._stats as DeltaStats;
+        if (_stats) {
+          const s = _stats as DeltaStats;
           appState.stats.starredCount = s.starred;
           appState.stats.labeledCount = s.labeled;
           appState.stats.trashedCount = s.trashed;

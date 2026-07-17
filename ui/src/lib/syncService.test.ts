@@ -32,12 +32,93 @@ vi.mock('./logger', () => ({
 import { syncService } from './syncService.svelte';
 import { filterState } from './filterState.svelte';
 
+function makeSyncAppState(photos: Record<string, any>, visibleOrder: string[]): any {
+  return {
+    v2: {
+      Root: '/media',
+      CacheDir: '',
+      VisibleOrder: visibleOrder,
+      Photos: photos,
+      TrashedCount: 0,
+      StarredCount: 0,
+      LabeledCount: 0,
+      RotatedCount: 0,
+      UndoLen: 0,
+    },
+    stats: { total: visibleOrder.length, trashedCount: 0, starredCount: 0, labeledCount: 0, undoLen: 0 },
+    currentFile: null,
+    currentIndex: 0,
+    selectionPivot: 0,
+    lastNonUndoableAction: '',
+    selectedIndices: [],
+    sessionVersion: 1,
+    updateStarredIndices: vi.fn(),
+    validateSelection: vi.fn(),
+    starredIndices: [],
+  };
+}
+
 describe('syncService cache busting on structural sync', () => {
   beforeEach(() => {
     Object.keys(handlers).forEach((k) => delete handlers[k]);
     updateFilteredIndices.mockClear();
     filterState.filterMode = FILTER_MODES.NONE as any;
     filterState.activeFilters = {};
+  });
+
+  it('replaces photo and map references when applying a label delta', () => {
+    const photo = { ID: 'a.jpg', IsStarred: false, Label: 0, Rotation: 0, IsTrashed: false };
+    const photos = { 'a.jpg': photo };
+    const appState = makeSyncAppState(photos, ['a.jpg']);
+    appState.currentFile = { filename: 'a.jpg', index: 0, label: 0, starred: false, rotation: 0 };
+    syncService.init(appState);
+
+    handlers.SyncDelta?.({ PhotoID: 'a.jpg', Changes: { Label: 1 } });
+
+    expect(appState.v2.Photos).not.toBe(photos);
+    expect(appState.v2.Photos['a.jpg']).not.toBe(photo);
+    expect(appState.v2.Photos['a.jpg'].Label).toBe(1);
+    expect(appState.currentFile.label).toBe(1);
+    expect(appState.v2.Photos['a.jpg']).not.toHaveProperty('_stats');
+  });
+
+  it('prunes photos absent from partial structural order', async () => {
+    const appState = makeSyncAppState({
+      'a.jpg': { ID: 'a.jpg', IsStarred: false, Label: 0, Rotation: 0, IsTrashed: false },
+      'b.jpg': { ID: 'b.jpg', IsStarred: false, Label: 0, Rotation: 0, IsTrashed: false },
+      'c.jpg': { ID: 'c.jpg', IsStarred: false, Label: 1, Rotation: 0, IsTrashed: false },
+    }, ['a.jpg', 'b.jpg', 'c.jpg']);
+    appState.currentFile = { filename: 'a.jpg', index: 0, label: 0, starred: false, rotation: 0 };
+    appState.selectedIndices = [1, 2];
+    appState.selectionPivot = 1;
+    syncService.init(appState);
+
+    await handlers.SyncState?.({
+      Root: '/media', CacheDir: '', IsPartial: true,
+      VisibleOrder: ['a.jpg', 'c.jpg'], Photos: {},
+      TrashedCount: 0, StarredCount: 0, LabeledCount: 1, RotatedCount: 0, UndoLen: 0,
+    });
+
+    expect(Object.keys(appState.v2.Photos).sort()).toEqual(['a.jpg', 'c.jpg']);
+    expect(appState.v2.Photos['c.jpg'].Label).toBe(1);
+    expect(appState.selectedIndices).toEqual([1]);
+    expect(appState.selectionPivot).toBe(appState.currentIndex);
+  });
+
+  it('fully replaces photos on non-partial authoritative sync', async () => {
+    const appState = makeSyncAppState({
+      'stale.jpg': { ID: 'stale.jpg', IsStarred: true, Label: 1, Rotation: 0, IsTrashed: false },
+    }, ['stale.jpg']);
+    syncService.init(appState);
+
+    await handlers.SyncState?.({
+      Root: '/media', CacheDir: '', IsPartial: false,
+      VisibleOrder: ['fresh.jpg'],
+      Photos: { 'fresh.jpg': { ID: 'fresh.jpg', IsStarred: false, Label: 0, Rotation: 0, IsTrashed: false } },
+      TrashedCount: 0, StarredCount: 0, LabeledCount: 0, RotatedCount: 0, UndoLen: 0,
+    });
+
+    expect(Object.keys(appState.v2.Photos)).toEqual(['fresh.jpg']);
   });
 
   it('increments sessionVersion on structural SyncState', async () => {

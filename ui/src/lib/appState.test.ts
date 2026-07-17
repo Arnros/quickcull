@@ -10,6 +10,7 @@ vi.mock('./api', () => ({
     getFile: vi.fn(),
     getFolders: vi.fn(),
     getFilters: vi.fn(),
+    refresh: vi.fn(),
   },
 }));
 
@@ -204,6 +205,15 @@ describe('AppState cache-busting on media-changing actions', () => {
       expect(navigationService.loadFile).toHaveBeenCalled();
     });
     expect(appState.sessionVersion).toBeGreaterThan(before);
+  });
+
+  it('does not load a file after refresh empties the folder', async () => {
+    (api.refresh as any).mockResolvedValue({ total: 0, index: -1 });
+
+    await appState.refresh();
+
+    expect(navigationService.loadFile).not.toHaveBeenCalled();
+    expect(appState.currentFile).toBeNull();
   });
 
   it('loads folders and filters when undoing a trash action', async () => {

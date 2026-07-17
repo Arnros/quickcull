@@ -1,12 +1,27 @@
 package review
 
 import (
-	"quickcull/internal/bus"
 	"os"
 	"path/filepath"
+	"quickcull/internal/bus"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 )
+
+func waitForExport(t *testing.T, srv *Server) {
+	t.Helper()
+	for {
+		srv.exportMu.Lock()
+		active := srv.exportCancel != nil
+		srv.exportMu.Unlock()
+		if !active {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
 
 func TestServerExportFiles(t *testing.T) {
 	// 1. Setup source directory
@@ -41,15 +56,7 @@ func TestServerExportFiles(t *testing.T) {
 	}
 
 	// WAIT for async export
-	for {
-		srv.exportMu.Lock()
-		active := srv.exportCancel != nil
-		srv.exportMu.Unlock()
-		if !active {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForExport(t, srv)
 
 	// 5. Verify
 	for _, f := range files {
@@ -67,15 +74,7 @@ func TestServerExportFiles(t *testing.T) {
 	}
 
 	// WAIT for async export
-	for {
-		srv.exportMu.Lock()
-		active := srv.exportCancel != nil
-		srv.exportMu.Unlock()
-		if !active {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForExport(t, srv)
 
 	// Verify moved files are in new dest and gone from source
 	for _, f := range files {
@@ -116,15 +115,7 @@ func TestMoveExportPreservesMetadataInDestinationFolder(t *testing.T) {
 		t.Fatalf("move export failed: %v", err)
 	}
 
-	for {
-		app.server.exportMu.Lock()
-		active := app.server.exportCancel != nil
-		app.server.exportMu.Unlock()
-		if !active {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForExport(t, app.server)
 
 	srv2 := NewServer()
 	srv2.persistence = app.server.persistence
@@ -141,5 +132,64 @@ func TestMoveExportPreservesMetadataInDestinationFolder(t *testing.T) {
 	}
 	if got.Rotation != 90 {
 		t.Errorf("expected moved photo to keep rotation 90, got %d", got.Rotation)
+	}
+}
+
+func TestPartialMoveRefreshReconcilesSuccessfulFiles(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.jpg", "b.jpg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("jpeg"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dest := t.TempDir()
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{server: srv}
+	if err := os.Remove(filepath.Join(root, "b.jpg")); err != nil {
+		t.Fatal(err)
+	}
+
+	var eventsMu sync.Mutex
+	var events []string
+	var snapshots []AppStateDTO
+	srv.SetBroadcastHook(func(name string, data any) {
+		eventsMu.Lock()
+		defer eventsMu.Unlock()
+		events = append(events, name)
+		if name == eventSyncState {
+			snapshots = append(snapshots, data.(AppStateDTO))
+		}
+	})
+
+	if err := srv.ExportFilesPaths([]string{"a.jpg", "b.jpg"}, dest, true); err != nil {
+		t.Fatal(err)
+	}
+	waitForExport(t, srv)
+	res, err := app.Refresh(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 0 {
+		t.Fatalf("source total = %d", res.Total)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "a.jpg")); err != nil {
+		t.Fatalf("successful move missing from destination: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.jpg")); !os.IsNotExist(err) {
+		t.Fatalf("successful move remains in source: %v", err)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	folderChanged := slices.Index(events, eventFolderChanged)
+	exportComplete := slices.Index(events, eventExportComplete)
+	if folderChanged < 0 || exportComplete < 0 || folderChanged > exportComplete {
+		t.Fatalf("unexpected export event order: %v", events)
+	}
+	if len(snapshots) != 1 || len(snapshots[0].Photos) != 0 {
+		t.Fatalf("refresh did not clear source state: %+v", snapshots)
 	}
 }

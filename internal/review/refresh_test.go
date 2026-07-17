@@ -3,8 +3,120 @@ package review
 import (
 	"os"
 	"path/filepath"
+	"quickcull/internal/bus"
+	"slices"
 	"testing"
 )
+
+func TestRefreshReconcilesAndBroadcastsAuthoritativeAppState(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.jpg", "b.jpg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("jpeg"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{server: srv}
+	if _, _, err := srv.applyEvent(bus.Event{
+		Type: bus.TypeCommandToggleStar,
+		Payload: bus.CommandToggleStarPayload{
+			PhotoID: "a.jpg",
+			Starred: true,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := srv.applyEvent(bus.Event{
+		Type: bus.TypeCommandLabelPhoto,
+		Payload: bus.CommandLabelPhotoPayload{
+			PhotoID: "b.jpg",
+			Label:   1,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "b.jpg")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "c.jpg"), []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var snapshots []AppStateDTO
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == eventSyncState {
+			snapshots = append(snapshots, data.(AppStateDTO))
+		}
+	})
+
+	res, err := app.Refresh(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 {
+		t.Fatalf("expected one SyncState, got %d", len(snapshots))
+	}
+	got := snapshots[0]
+	if got.IsPartial {
+		t.Fatal("small refresh must be authoritative")
+	}
+	if !slices.Equal(got.VisibleOrder, []string{"a.jpg", "c.jpg"}) {
+		t.Fatalf("order = %v", got.VisibleOrder)
+	}
+	if _, ok := got.Photos["b.jpg"]; ok {
+		t.Fatal("removed photo was retained")
+	}
+	if p := got.Photos["c.jpg"]; p.ID != "c.jpg" || p.Label != 0 {
+		t.Fatalf("new photo = %+v", p)
+	}
+	if p := got.Photos["a.jpg"]; !p.IsStarred {
+		t.Fatal("starred photo lost its metadata")
+	}
+	if res.Index != 1 {
+		t.Fatalf("removed current photo should fall back to index 1, got %d", res.Index)
+	}
+}
+
+func TestRefreshEmptyFolderReturnsNoIndexAndClearsState(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "a.jpg")
+	if err := os.WriteFile(path, []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{server: srv}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	var snapshots []AppStateDTO
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == eventSyncState {
+			snapshots = append(snapshots, data.(AppStateDTO))
+		}
+	})
+	res, err := app.Refresh(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 0 || res.Index != -1 {
+		t.Fatalf("empty refresh response = %+v", res)
+	}
+	if len(snapshots) != 1 {
+		t.Fatalf("expected one SyncState, got %d", len(snapshots))
+	}
+	if len(snapshots[0].VisibleOrder) != 0 || len(snapshots[0].Photos) != 0 {
+		t.Fatalf("empty snapshot = %+v", snapshots[0])
+	}
+}
 
 func TestRefreshDetectsExternalChanges(t *testing.T) {
 	// 1. Setup temp dir with 2 files

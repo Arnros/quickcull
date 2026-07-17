@@ -532,11 +532,18 @@ func (a *App) Refresh(currentIndex int) (ActionResponse, error) {
 	if derivedRemoved > 0 {
 		slog.Info("Derived cache GC completed", "files_removed", derivedRemoved)
 	}
+	a.server.ReconcileScannedFiles(newFiles)
 
 	newIndex := -1
 	if curRel != "" {
 		if idx := state.FindIndex(curRel); idx != -1 {
 			newIndex = idx
+		}
+	}
+	if newIndex == -1 && newTotal > 0 {
+		newIndex = min(currentIndex, newTotal-1)
+		if newIndex < 0 {
+			newIndex = 0
 		}
 	}
 
