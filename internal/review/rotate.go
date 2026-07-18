@@ -26,17 +26,23 @@ func ApplyEXIFOrientation(ctx context.Context, absPath string, degrees int) erro
 	// 2. Calculate new orientation
 	currDeg := 0
 	switch current {
-	case 3: currDeg = 180
-	case 6: currDeg = 90
-	case 8: currDeg = 270
+	case 3:
+		currDeg = 180
+	case 6:
+		currDeg = 90
+	case 8:
+		currDeg = 270
 	}
 
 	newDeg := (currDeg + degrees) % 360
 	orientation := 1
 	switch newDeg {
-	case 90:  orientation = 6
-	case 180: orientation = 3
-	case 270: orientation = 8
+	case 90:
+		orientation = 6
+	case 180:
+		orientation = 3
+	case 270:
+		orientation = 8
 	}
 
 	slog.Info("Applying EXIF orientation", "path", absPath, "target", orientation)
@@ -46,9 +52,10 @@ func ApplyEXIFOrientation(ctx context.Context, absPath string, degrees int) erro
 	ctx, cancel := context.WithTimeout(ctx, OrientationTimeout)
 	defer cancel()
 
+	// #nosec G204 -- ExiftoolPath validates the executable; "--" terminates options before the internal media path.
 	cmd := exec.CommandContext(ctx, exe, "-overwrite_original", "-m", fmt.Sprintf("-Orientation#=%d", orientation), "--", absPath)
 	utils.ConfigureSilentCommand(cmd)
-	
+
 	err := cmd.Run()
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {

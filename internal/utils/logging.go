@@ -75,6 +75,7 @@ func SetupGlobalLogging(debugMode bool, logPath string) {
 	rotateLog(logPath)
 
 	var err error
+	// #nosec G304 -- logPath is derived from QuickCull's application cache directory.
 	logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "CRITICAL: Failed to open log file: %v\n", err)

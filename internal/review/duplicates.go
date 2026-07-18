@@ -394,84 +394,14 @@ func (c *MediaCache) GetMetadataCached(path string) *EXIFInfo {
 
 // GetHash returns the pHash of a file, with caching.
 func (c *MediaCache) GetHash(path string) *goimagehash.ImageHash {
-	// 1. In-memory check
-	c.mu.RLock()
-	if h, ok := c.hashCache[path]; ok {
-		c.mu.RUnlock()
-		return h
+	if hash := c.loadCachedHash(path); hash != nil {
+		return hash
 	}
-	p := c.persistence
-	c.mu.RUnlock()
-
-	// 2. Persistence check
-	if p != nil {
-		if val, ok := p.GetHash(path); ok {
-			h := goimagehash.NewImageHash(val, goimagehash.PHash)
-			c.mu.Lock()
-			c.hashCache[path] = h
-			c.mu.Unlock()
-			return h
-		}
-	}
-
-	// 3. Classify
 	ext := strings.ToLower(filepath.Ext(path))
 	if !domain.FromExtension(ext).SupportsPHash() {
 		return nil
 	}
-
-	// 4. Calculate — singleflight.Do ensures that concurrent requests for the
-	// same path share a single computation instead of launching N goroutines.
-	val, err, _ := c.hashGroup.Do(path, func() (interface{}, error) {
-		c.mu.RLock()
-		cacheDir := c.cacheDir
-		computeSem := c.computeSem
-		c.mu.RUnlock()
-
-		targetPath := path
-		if cacheDir != "" {
-			// TRY THUMBNAIL FIRST for pHash (massive speedup)
-			if thumb, err := GetThumbnail(path, cacheDir, computeSem); err == nil && thumb != "" {
-				targetPath = thumb
-			}
-		}
-
-		f, err := os.Open(targetPath) // #nosec G304 -- path comes from the indexed media root or internal cache.
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-
-		// If we are NOT using a thumbnail, this is a full-size decode.
-		// We MUST use the semaphore here. (GetThumbnail already uses it if needed).
-		if targetPath == path && computeSem != nil {
-			computeSem <- struct{}{}
-			defer func() { <-computeSem }()
-		}
-
-		img, _, err := image.Decode(f)
-		if err != nil {
-			return nil, err
-		}
-
-		hash, err := goimagehash.PerceptionHash(img)
-		if err != nil {
-			return nil, err
-		}
-
-		c.mu.Lock()
-		c.hashCache[path] = hash
-		p := c.persistence
-		c.mu.Unlock()
-
-		if p != nil {
-			if err := p.PutHash(path, hash.GetHash()); err != nil {
-				slog.Warn("Failed to persist pHash to cache", "path", path, "error", err)
-			}
-		}
-
-		return hash, nil
-	})
+	val, err, _ := c.hashGroup.Do(path, func() (interface{}, error) { return c.computeAndCacheHash(path) })
 
 	if err != nil {
 		if !recordAnalysisIssue(analysisIssueHash, path, err) {
@@ -482,6 +412,71 @@ func (c *MediaCache) GetHash(path string) *goimagehash.ImageHash {
 	return val.(*goimagehash.ImageHash)
 }
 
+func (c *MediaCache) loadCachedHash(path string) *goimagehash.ImageHash {
+	c.mu.RLock()
+	if hash, ok := c.hashCache[path]; ok {
+		c.mu.RUnlock()
+		return hash
+	}
+	persistence := c.persistence
+	c.mu.RUnlock()
+	if persistence == nil {
+		return nil
+	}
+	value, ok := persistence.GetHash(path)
+	if !ok {
+		return nil
+	}
+	hash := goimagehash.NewImageHash(value, goimagehash.PHash)
+	c.mu.Lock()
+	c.hashCache[path] = hash
+	c.mu.Unlock()
+	return hash
+}
+
+func (c *MediaCache) computeAndCacheHash(path string) (*goimagehash.ImageHash, error) {
+	c.mu.RLock()
+	cacheDir, computeSem := c.cacheDir, c.computeSem
+	c.mu.RUnlock()
+	targetPath := preferredHashSource(path, cacheDir, computeSem)
+	file, err := os.Open(targetPath) // #nosec G304 -- path comes from the indexed media root or internal cache.
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if targetPath == path && computeSem != nil {
+		computeSem <- struct{}{}
+		defer func() { <-computeSem }()
+	}
+	img, _, err := image.Decode(file)
+	if err != nil {
+		return nil, err
+	}
+	hash, err := goimagehash.PerceptionHash(img)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.hashCache[path] = hash
+	persistence := c.persistence
+	c.mu.Unlock()
+	if persistence != nil {
+		if err := persistence.PutHash(path, hash.GetHash()); err != nil {
+			slog.Warn("Failed to persist pHash to cache", "path", path, "error", err)
+		}
+	}
+	return hash, nil
+}
+
+func preferredHashSource(path, cacheDir string, computeSem chan struct{}) string {
+	if cacheDir != "" {
+		if thumbnail, err := GetThumbnail(path, cacheDir, computeSem); err == nil && thumbnail != "" {
+			return thumbnail
+		}
+	}
+	return path
+}
+
 // GetMetadata returns EXIF info, with caching.
 func (c *MediaCache) GetMetadata(path string) *EXIFInfo {
 	defer func() {
@@ -490,60 +485,60 @@ func (c *MediaCache) GetMetadata(path string) *EXIFInfo {
 		}
 	}()
 
-	// 1. In-memory
-	c.mu.RLock()
-	if info, ok := c.exifCache[path]; ok {
-		c.mu.RUnlock()
+	if info := c.loadCachedMetadata(path); info != nil {
 		return info
 	}
-	p := c.persistence
-	c.mu.RUnlock()
-
-	// 2. Persistence check
-	if p != nil {
-		if info, ok := p.GetMetadata(path); ok {
-			// Legacy cache migration: old key meant "no exiftool".
-			// If exiftool is now available, re-extract once instead of returning stale value.
-			if info.Camera == rawNoExiftoolCameraKey && internalexif.IsExiftoolAvailable() {
-				// Continue to extraction path below.
-			} else
-			// Keep cached metadata once we have a fingerprint (meaning we tried extraction)
-			// or if it already carries useful fields.
-			if info.Fingerprint != "" || info.Camera != "" || info.ISO != "" || info.Date != "" || (info.Width != 0 && info.Height != 0) {
-				c.mu.Lock()
-				c.exifCache[path] = info
-				c.mu.Unlock()
-				return info
-			}
-		}
-	}
-
-	// 3. Extract — singleflight.Do prevents redundant extractions when
-	// multiple goroutines request metadata for the same path at the same time.
-	val, err, _ := c.exifGroup.Do(path, func() (interface{}, error) {
-		info := ExtractEXIFInfo(path)
-		if info == nil {
-			return nil, nil
-		}
-
-		c.mu.Lock()
-		c.exifCache[path] = info
-		p := c.persistence
-		c.mu.Unlock()
-
-		if p != nil {
-			if err := p.PutMetadata(path, info); err != nil {
-				slog.Warn("Failed to persist metadata to cache", "path", path, "error", err)
-			}
-		}
-
-		return info, nil
-	})
+	val, err, _ := c.exifGroup.Do(path, func() (interface{}, error) { return c.extractAndCacheMetadata(path), nil })
 
 	if err != nil || val == nil {
 		return nil
 	}
 	return val.(*EXIFInfo)
+}
+
+func (c *MediaCache) loadCachedMetadata(path string) *EXIFInfo {
+	c.mu.RLock()
+	if info, ok := c.exifCache[path]; ok {
+		c.mu.RUnlock()
+		return info
+	}
+	persistence := c.persistence
+	c.mu.RUnlock()
+	if persistence == nil {
+		return nil
+	}
+	info, ok := persistence.GetMetadata(path)
+	if !ok || !metadataCacheUsable(info) {
+		return nil
+	}
+	c.mu.Lock()
+	c.exifCache[path] = info
+	c.mu.Unlock()
+	return info
+}
+
+func metadataCacheUsable(info *EXIFInfo) bool {
+	if info.Camera == rawNoExiftoolCameraKey && internalexif.IsExiftoolAvailable() {
+		return false
+	}
+	return info.Fingerprint != "" || info.Camera != "" || info.ISO != "" || info.Date != "" || (info.Width != 0 && info.Height != 0)
+}
+
+func (c *MediaCache) extractAndCacheMetadata(path string) *EXIFInfo {
+	info := ExtractEXIFInfo(path)
+	if info == nil {
+		return nil
+	}
+	c.mu.Lock()
+	c.exifCache[path] = info
+	persistence := c.persistence
+	c.mu.Unlock()
+	if persistence != nil {
+		if err := persistence.PutMetadata(path, info); err != nil {
+			slog.Warn("Failed to persist metadata to cache", "path", path, "error", err)
+		}
+	}
+	return info
 }
 
 // RefreshMetadata clears cache entries and forces metadata re-extraction.

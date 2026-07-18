@@ -30,6 +30,28 @@ func (s *Server) runAnalysisWorkerLoop(ctx context.Context, numIOWorkers int, co
 }
 
 func (s *Server) processNextAnalysisTask(ctx context.Context, numIOWorkers int, computeSem chan struct{}, processors []MediaProcessor, hashDeferred *atomic.Bool, progressMu *sync.Mutex, processed *int, lastEmitAt *time.Time) bool {
+	idx, itemPriority, status := s.nextAnalysisTask()
+	if status == analysisTaskStop {
+		return false
+	}
+	if status == analysisTaskRetry {
+		return true
+	}
+	s.recordViewReady(idx, itemPriority)
+	s.processAnalysisPath(ctx, idx, itemPriority, numIOWorkers, computeSem, processors, hashDeferred)
+	s.updateAnalysisProgress(progressMu, processed, lastEmitAt)
+	return true
+}
+
+type analysisTaskStatus uint8
+
+const (
+	analysisTaskProcess analysisTaskStatus = iota
+	analysisTaskRetry
+	analysisTaskStop
+)
+
+func (s *Server) nextAnalysisTask() (int, int, analysisTaskStatus) {
 	slot := s.scheduleSlot.Add(1) - 1
 	mode := s.schedulerMode()
 	if slot%promotionDecayCheckEvery == 0 {
@@ -40,66 +62,54 @@ func (s *Server) processNextAnalysisTask(ctx context.Context, numIOWorkers int, 
 	}
 	idx, itemPriority, ok := s.analysisQueue.PopWithTierPreference(s.schedulerTierPreference(mode, slot))
 	if !ok {
-		return false
+		return 0, 0, analysisTaskStop
 	}
-	// Check if we should yield to urgent UI tasks before processing.
-	if idx%urgentCheckEvery == 0 {
-		if s.analysisQueue.HasUrgentTask() {
-			s.analysisQueue.Push(idx, 0)
-			time.Sleep(urgentYieldInterval)
-			return true
-		}
+	if idx%urgentCheckEvery == 0 && s.analysisQueue.HasUrgentTask() {
+		s.analysisQueue.Push(idx, 0)
+		time.Sleep(urgentYieldInterval)
+		return 0, 0, analysisTaskRetry
 	}
-	s.recordViewReady(idx, itemPriority)
+	return idx, itemPriority, analysisTaskProcess
+}
 
+func (s *Server) processAnalysisPath(ctx context.Context, idx, itemPriority, numIOWorkers int, computeSem chan struct{}, processors []MediaProcessor, hashDeferred *atomic.Bool) {
 	state := s.getState()
 	if state == nil {
-		return true
+		return
 	}
-
 	path, err := state.AbsPath(idx)
-	if err == nil {
-		currentHashDeferred := s.currentHashDeferPolicy()
-		if currentHashDeferred != hashDeferred.Load() {
-			hashDeferred.Store(currentHashDeferred)
-			s.setAnalysisPerf(numIOWorkers, currentHashDeferred)
-		}
+	if err != nil {
+		return
+	}
+	currentHashDeferred := s.currentHashDeferPolicy()
+	if currentHashDeferred != hashDeferred.Load() {
+		hashDeferred.Store(currentHashDeferred)
+		s.setAnalysisPerf(numIOWorkers, currentHashDeferred)
+	}
+	context := &ProcessorContext{Cache: s.cache, CacheDir: s.cacheDir, ComputeSem: computeSem, SkipBackgroundHash: currentHashDeferred, IsThumbnailEager: true, SkipHeavyThumbnail: itemPriority < priorityWarmMin}
+	processor := GetProcessorFor(path, processors)
+	if processor == nil {
+		return
+	}
+	if err := processor.Process(ctx, path, context); err != nil && !recordAnalysisIssue(analysisIssueProcessor, path, err) {
+		slog.Debug("processor error", "path", path, "error", err)
+	}
+	s.updateBurstAndDuplicates(idx, path, currentHashDeferred)
+}
 
-		// --- Execute plugin-based processing ---
-		pctx := &ProcessorContext{
-			Cache:              s.cache,
-			CacheDir:           s.cacheDir,
-			ComputeSem:         computeSem,
-			SkipBackgroundHash: currentHashDeferred,
-			IsThumbnailEager:   true,
-			SkipHeavyThumbnail: itemPriority < priorityWarmMin,
-		}
-
-		proc := GetProcessorFor(path, processors)
-		if proc != nil {
-			if err := proc.Process(ctx, path, pctx); err != nil {
-				if !recordAnalysisIssue(analysisIssueProcessor, path, err) {
-					slog.Debug("processor error", "path", path, "error", err)
-				}
-			}
-		}
-
-		// Bursts (photo-specific)
-		if proc != nil {
-			meta := s.cache.GetMetadata(path)
-			if meta != nil && meta.Date != "" {
-				if _, ok := s.burstCache.Load(idx); !ok {
-					s.getBurstInfo(idx, path)
-				}
-			}
-
-			// Live Duplicate Detection (if pHash was computed)
-			if !currentHashDeferred {
-				s.checkForLiveDuplicates(idx)
-			}
+func (s *Server) updateBurstAndDuplicates(index int, path string, hashDeferred bool) {
+	metadata := s.cache.GetMetadata(path)
+	if metadata != nil && metadata.Date != "" {
+		if _, ok := s.burstCache.Load(index); !ok {
+			s.getBurstInfo(index, path)
 		}
 	}
+	if !hashDeferred {
+		s.checkForLiveDuplicates(index)
+	}
+}
 
+func (s *Server) updateAnalysisProgress(progressMu *sync.Mutex, processed *int, lastEmitAt *time.Time) {
 	progressMu.Lock()
 	*processed++
 	currentProcessed := *processed
@@ -118,7 +128,6 @@ func (s *Server) processNextAnalysisTask(ctx context.Context, numIOWorkers int, 
 		s.emitProgress(currentProcessed, currentProcessed >= currentTotal, lastEmitAt)
 	}
 
-	return true
 }
 
 func (s *Server) recordViewReady(index int, itemPriority int) {

@@ -116,30 +116,34 @@ func (w *asyncMetadataWriter) flush() {
 		}
 	}
 
-	// Requeue failed writes if they haven't been superseded
-	if len(failedSingle) > 0 || len(failedFull) > 0 || len(failedHistory) > 0 {
-		w.mu.Lock()
-		for folderID, metadata := range failedFull {
-			if _, exists := w.pendingFull[folderID]; !exists {
-				w.pendingFull[folderID] = metadata
+	w.requeueFailedWrites(failedSingle, failedFull, failedHistory)
+}
+
+func (w *asyncMetadataWriter) requeueFailedWrites(failedSingle, failedFull map[string]map[string]persistence.PhotoMetadata, failedHistory map[string][]byte) {
+	if len(failedSingle) == 0 && len(failedFull) == 0 && len(failedHistory) == 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for folderID, metadata := range failedFull {
+		if _, exists := w.pendingFull[folderID]; !exists {
+			w.pendingFull[folderID] = metadata
+		}
+	}
+	for folderID, photos := range failedSingle {
+		if _, exists := w.pendingSingle[folderID]; !exists {
+			w.pendingSingle[folderID] = make(map[string]persistence.PhotoMetadata)
+		}
+		for photoID, meta := range photos {
+			if _, exists := w.pendingSingle[folderID][photoID]; !exists {
+				w.pendingSingle[folderID][photoID] = meta
 			}
 		}
-		for folderID, photos := range failedSingle {
-			if _, exists := w.pendingSingle[folderID]; !exists {
-				w.pendingSingle[folderID] = make(map[string]persistence.PhotoMetadata)
-			}
-			for photoID, meta := range photos {
-				if _, exists := w.pendingSingle[folderID][photoID]; !exists {
-					w.pendingSingle[folderID][photoID] = meta
-				}
-			}
+	}
+	for folderID, history := range failedHistory {
+		if _, exists := w.pendingHistory[folderID]; !exists {
+			w.pendingHistory[folderID] = history
 		}
-		for folderID, history := range failedHistory {
-			if _, exists := w.pendingHistory[folderID]; !exists {
-				w.pendingHistory[folderID] = history
-			}
-		}
-		w.mu.Unlock()
 	}
 }
 

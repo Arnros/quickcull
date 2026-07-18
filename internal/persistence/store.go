@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -40,7 +41,7 @@ const (
 
 // NewMetadataStore initializes the database at the given path.
 func NewMetadataStore(dbPath string) (StateStore, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create metadata directory: %w", err)
 	}
 
@@ -55,8 +56,8 @@ func NewMetadataStore(dbPath string) (StateStore, error) {
 		return err
 	})
 	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("init metadata system bucket: %w", err)
+		closeErr := db.Close()
+		return nil, fmt.Errorf("init metadata system bucket: %w", errors.Join(err, closeErr))
 	}
 
 	return &MetadataStore{db: db}, nil

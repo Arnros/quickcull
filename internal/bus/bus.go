@@ -59,60 +59,46 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
+	var err error
 	switch e.Type {
 	case TypeCommandToggleStar:
-		var p CommandToggleStarPayload
-		if err := json.Unmarshal(aux.Payload, &p); err != nil {
-			return err
-		}
-		e.Payload = p
+		e.Payload, err = decodePayload[CommandToggleStarPayload](aux.Payload)
 	case TypeCommandTrashPhoto:
-		var p CommandTrashPhotoPayload
-		if err := json.Unmarshal(aux.Payload, &p); err != nil {
-			return err
-		}
-		e.Payload = p
+		e.Payload, err = decodePayload[CommandTrashPhotoPayload](aux.Payload)
 	case TypeCommandLabelPhoto:
-		var p CommandLabelPhotoPayload
-		if err := json.Unmarshal(aux.Payload, &p); err != nil {
-			return err
-		}
-		e.Payload = p
+		e.Payload, err = decodePayload[CommandLabelPhotoPayload](aux.Payload)
 	case TypeCommandRotatePhoto:
-		var p CommandRotatePhotoPayload
-		if err := json.Unmarshal(aux.Payload, &p); err != nil {
-			return err
-		}
-		e.Payload = p
+		e.Payload, err = decodePayload[CommandRotatePhotoPayload](aux.Payload)
 	case TypeCommandUndo:
-		var p CommandUndoPayload
-		if err := json.Unmarshal(aux.Payload, &p); err != nil {
-			return err
-		}
-		e.Payload = p
+		e.Payload, err = decodePayload[CommandUndoPayload](aux.Payload)
 	case TypeCommandResetMetadata:
-		var p CommandResetMetadataPayload
-		if err := json.Unmarshal(aux.Payload, &p); err != nil {
-			return err
-		}
-		e.Payload = p
+		e.Payload, err = decodePayload[CommandResetMetadataPayload](aux.Payload)
 	case TypeCommandBatch:
-		var p CommandBatchPayload
-		if err := json.Unmarshal(aux.Payload, &p); err != nil {
-			return err
-		}
-		for _, sub := range p.Events {
-			if sub.Type == TypeCommandBatch {
-				return fmt.Errorf("nested CommandBatch not allowed")
-			}
-		}
-		e.Payload = p
+		e.Payload, err = decodeBatchPayload(aux.Payload)
 	default:
 		// For State events, we might not need to unmarshal them from history
 		e.Payload = aux.Payload
 	}
+	return err
+}
 
-	return nil
+func decodePayload[T any](raw json.RawMessage) (T, error) {
+	var payload T
+	err := json.Unmarshal(raw, &payload)
+	return payload, err
+}
+
+func decodeBatchPayload(raw json.RawMessage) (CommandBatchPayload, error) {
+	payload, err := decodePayload[CommandBatchPayload](raw)
+	if err != nil {
+		return payload, err
+	}
+	for _, event := range payload.Events {
+		if event.Type == TypeCommandBatch {
+			return payload, fmt.Errorf("nested CommandBatch not allowed")
+		}
+	}
+	return payload, nil
 }
 
 // StateDeltaPayload carries only changes to the state

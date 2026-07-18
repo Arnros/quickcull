@@ -709,40 +709,7 @@ func (a *App) Undo() (UndoResponse, error) {
 		return UndoResponse{}, domain.ErrNothingToUndo
 	}
 
-	actionType := ""
-	index := -1
-
-	photoID := photoIDFromPayload(undoneEvent.Payload)
-	// Map internal event types to frontend action types.
-	switch p := undoneEvent.Payload.(type) {
-	case bus.CommandTrashPhotoPayload:
-		actionType = "trash"
-		photoID = p.PhotoID
-	case bus.CommandToggleStarPayload:
-		actionType = "star"
-		photoID = p.PhotoID
-	case bus.CommandLabelPhotoPayload:
-		actionType = "label"
-		photoID = p.PhotoID
-	case bus.CommandRotatePhotoPayload:
-		actionType = "rotate"
-		photoID = p.PhotoID
-	case bus.CommandBatchPayload:
-		// Derive action type from first sub-event; index is not meaningful for batch.
-		if len(p.Events) > 0 {
-			switch p.Events[0].Payload.(type) {
-			case bus.CommandToggleStarPayload:
-				actionType = "star"
-			case bus.CommandLabelPhotoPayload:
-				actionType = "label"
-			case bus.CommandTrashPhotoPayload:
-				actionType = "trash"
-			case bus.CommandRotatePhotoPayload:
-				actionType = "rotate"
-			}
-		}
-		index = 0 // batch has no single index; use 0 as sentinel
-	}
+	actionType, photoID, index := undoResponseTarget(undoneEvent)
 	if photoID != "" && index < 0 {
 		index = state.FindIndex(photoID)
 	}
@@ -755,6 +722,43 @@ func (a *App) Undo() (UndoResponse, error) {
 		ActionType: actionType,
 		Index:      index,
 	}, nil
+}
+
+func undoResponseTarget(event bus.Event) (actionType, photoID string, index int) {
+	index = -1
+	photoID = photoIDFromPayload(event.Payload)
+	switch payload := event.Payload.(type) {
+	case bus.CommandTrashPhotoPayload:
+		return "trash", payload.PhotoID, index
+	case bus.CommandToggleStarPayload:
+		return "star", payload.PhotoID, index
+	case bus.CommandLabelPhotoPayload:
+		return "label", payload.PhotoID, index
+	case bus.CommandRotatePhotoPayload:
+		return "rotate", payload.PhotoID, index
+	case bus.CommandBatchPayload:
+		if len(payload.Events) == 0 {
+			return "", "", 0
+		}
+		return undoActionType(payload.Events[0].Payload), "", 0
+	default:
+		return "", photoID, index
+	}
+}
+
+func undoActionType(payload any) string {
+	switch payload.(type) {
+	case bus.CommandToggleStarPayload:
+		return "star"
+	case bus.CommandLabelPhotoPayload:
+		return "label"
+	case bus.CommandTrashPhotoPayload:
+		return "trash"
+	case bus.CommandRotatePhotoPayload:
+		return "rotate"
+	default:
+		return ""
+	}
 }
 
 // GetHistory returns folder history

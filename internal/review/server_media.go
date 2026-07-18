@@ -122,41 +122,41 @@ func (s *Server) PurgeDerivedCacheFiles(keepPaths map[string]struct{}) int {
 		return 0
 	}
 
-	removed := 0
-	thumbDir := filepath.Join(cacheDir, thumbsDirName)
-	staleThumbs := make([]string, 0, staleThumbnailsCap)
+	removed := removeFiles(collectStaleThumbnails(filepath.Join(cacheDir, thumbsDirName), keepPaths))
+	return removed + purgeConvertedCacheFiles(cacheDir, keepPaths)
+}
 
-	// Purge thumbnail files.
-	if err := filepath.WalkDir(thumbDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
+func collectStaleThumbnails(thumbDir string, keepPaths map[string]struct{}) []string {
+	stale := make([]string, 0, staleThumbnailsCap)
+	if err := filepath.WalkDir(thumbDir, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && filepath.Ext(path) == jpgExt && filepath.Base(path) != placeholderError {
+			if _, keep := keepPaths[path]; !keep {
+				stale = append(stale, path)
+			}
 		}
-		if filepath.Ext(path) != jpgExt {
-			return nil
-		}
-		base := filepath.Base(path)
-		if base == placeholderError {
-			return nil
-		}
-		if _, ok := keepPaths[path]; ok {
-			return nil
-		}
-		staleThumbs = append(staleThumbs, path)
 		return nil
 	}); err != nil {
 		slog.Warn("PurgeDerivedCacheFiles: walk error", "dir", thumbDir, "error", err)
 	}
-	for _, path := range staleThumbs {
+	return stale
+}
+
+func removeFiles(paths []string) int {
+	removed := 0
+	for _, path := range paths {
 		if err := os.Remove(path); err == nil {
 			removed++
 		}
 	}
+	return removed
+}
 
-	// Purge converted files at cache root.
+func purgeConvertedCacheFiles(cacheDir string, keepPaths map[string]struct{}) int {
 	entries, err := os.ReadDir(cacheDir)
 	if err != nil {
-		return removed
+		return 0
 	}
+	removed := 0
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != jpgExt {
 			continue
@@ -169,7 +169,6 @@ func (s *Server) PurgeDerivedCacheFiles(keepPaths map[string]struct{}) int {
 			removed++
 		}
 	}
-
 	return removed
 }
 

@@ -10,6 +10,7 @@ import (
 var (
 	// commandExecutor allows overriding for tests
 	commandExecutor = func(name string, args ...string) error {
+		// #nosec G204 -- callers select a fixed OS utility; arguments are passed without a shell.
 		return exec.Command(name, args...).Start()
 	}
 	// lookPath allows overriding for tests

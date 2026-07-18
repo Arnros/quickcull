@@ -46,6 +46,7 @@ type Session struct {
 
 func NewSession() (*Session, error) {
 	exe := domain.ExiftoolPath()
+	// #nosec G204 -- ExiftoolPath returns a validated executable path and no user-controlled shell is involved.
 	cmd := exec.Command(exe, "-stay_open", "True", "-@", "-")
 	utils.ConfigureSilentCommand(cmd)
 	stdin, err := cmd.StdinPipe()
@@ -273,6 +274,7 @@ func ExiftoolSignature() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	// #nosec G204 -- the executable path is validated before this capability probe.
 	cmd := exec.CommandContext(ctx, exe, "-ver")
 	utils.ConfigureSilentCommand(cmd)
 	out, _ := cmd.Output()

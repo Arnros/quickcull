@@ -105,14 +105,7 @@ func loadConfig() {
 		if !os.IsNotExist(err) {
 			slog.Error("Failed to read config file", "path", path, "error", err)
 		}
-		// Default values for new config
-		config.WindowWidth = defaultWindowWidth
-		config.WindowHeight = defaultWindowHeight
-		config.DuplicateThreshold = defaultDuplicateThreshold
-		config.AutoRefreshSeconds = defaultAutoRefreshSeconds
-		config.BurstSeconds = defaultBurstSeconds
-		config.BurstMaxFiles = defaultBurstMaxFiles
-		config.StartupSnapshotEnabled = defaultStartupSnapshot
+		applyNewConfigDefaults(&config)
 		return
 	}
 
@@ -124,50 +117,66 @@ func loadConfig() {
 	if err := json.Unmarshal(data, &config); err != nil {
 		slog.Error("Failed to unmarshal config", "path", path, "error", err)
 	}
-	if config.DuplicateThreshold <= 0 {
-		config.DuplicateThreshold = defaultDuplicateThreshold
+	normalizeLoadedConfig(&config, raw)
+	setConfigLogLevel(config.Debug)
+	configMu.Unlock()
+}
+
+func applyNewConfigDefaults(cfg *Config) {
+	cfg.WindowWidth = defaultWindowWidth
+	cfg.WindowHeight = defaultWindowHeight
+	cfg.DuplicateThreshold = defaultDuplicateThreshold
+	cfg.AutoRefreshSeconds = defaultAutoRefreshSeconds
+	cfg.BurstSeconds = defaultBurstSeconds
+	cfg.BurstMaxFiles = defaultBurstMaxFiles
+	cfg.StartupSnapshotEnabled = defaultStartupSnapshot
+}
+
+func normalizeLoadedConfig(cfg *Config, raw map[string]json.RawMessage) {
+	if cfg.DuplicateThreshold <= 0 {
+		cfg.DuplicateThreshold = defaultDuplicateThreshold
 	}
-	if config.WindowWidth < minWindowWidth {
-		config.WindowWidth = defaultWindowWidth
+	if cfg.WindowWidth < minWindowWidth {
+		cfg.WindowWidth = defaultWindowWidth
 	}
-	if config.WindowHeight < minWindowHeight {
-		config.WindowHeight = defaultWindowHeight
+	if cfg.WindowHeight < minWindowHeight {
+		cfg.WindowHeight = defaultWindowHeight
 	}
-	if config.AutoRefreshSeconds <= 0 {
-		config.AutoRefreshSeconds = defaultAutoRefreshSeconds
+	if cfg.AutoRefreshSeconds <= 0 {
+		cfg.AutoRefreshSeconds = defaultAutoRefreshSeconds
 	}
-	if config.BurstSeconds <= 0 {
-		config.BurstSeconds = defaultBurstSeconds
+	if cfg.BurstSeconds <= 0 {
+		cfg.BurstSeconds = defaultBurstSeconds
 	}
-	if config.BurstMaxFiles <= 0 {
-		config.BurstMaxFiles = defaultBurstMaxFiles
+	if cfg.BurstMaxFiles <= 0 {
+		cfg.BurstMaxFiles = defaultBurstMaxFiles
 	}
 	if _, ok := raw["startupSnapshotEnabled"]; !ok {
-		config.StartupSnapshotEnabled = defaultStartupSnapshot
+		cfg.StartupSnapshotEnabled = defaultStartupSnapshot
 	}
-	// Initial state for new flags if not present
 	if _, ok := raw["windowIsMaximized"]; !ok {
-		config.WindowIsMaximized = false
+		cfg.WindowIsMaximized = false
 	}
 	if _, ok := raw["windowIsFullscreen"]; !ok {
-		config.WindowIsFullscreen = false
+		cfg.WindowIsFullscreen = false
 	}
-	// Initial position (negative means let OS decide)
 	if _, ok := raw["windowX"]; !ok {
-		config.WindowX = -1
+		cfg.WindowX = -1
 	}
 	if _, ok := raw["windowY"]; !ok {
-		config.WindowY = -1
+		cfg.WindowY = -1
 	}
-if config.Debug {
+	if cfg.Shortcuts == nil {
+		cfg.Shortcuts = make(map[string]string)
+	}
+}
+
+func setConfigLogLevel(debug bool) {
+	if debug {
 		utils.LogLevel.Set(slog.LevelDebug)
 	} else {
 		utils.LogLevel.Set(slog.LevelInfo)
 	}
-	if config.Shortcuts == nil {
-		config.Shortcuts = make(map[string]string)
-	}
-	configMu.Unlock()
 }
 
 func saveConfig() error {
@@ -194,69 +203,66 @@ func saveConfig() error {
 // ExiftoolPath returns configured exiftool path or searches common locations,
 // falling back to the default binary name if not found.
 func ExiftoolPath() string {
-	path := GetConfig().ExiftoolPath
-	if path != "" {
-		// Security: reject configured paths that are relative or contain traversal.
-		if !filepath.IsAbs(path) || strings.Contains(path, "..") {
-			slog.Warn("configured exiftool path rejected: must be absolute and not contain '..', falling back", "path", path)
-		} else if info, err := os.Stat(path); err != nil || info.IsDir() {
-			slog.Warn("configured exiftool path rejected: not an executable file, falling back", "path", path, "error", err)
-		} else {
-			return path
-		}
+	if path, ok := validatedConfiguredExiftoolPath(GetConfig().ExiftoolPath); ok {
+		return path
 	}
 
-	// 1. Try LookPath first (checks system PATH)
-	binaryName := defaultExiftoolBinary
-	if runtime.GOOS == "windows" {
-		binaryName = "exiftool.exe"
-	}
+	binaryName := exiftoolBinaryName()
 	if p, err := exec.LookPath(binaryName); err == nil {
 		return p
 	}
-
-	// 2. Check the directory of the running executable (useful for portable setups)
-	if exePath, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exePath)
-		var target string
-		if runtime.GOOS == "windows" {
-			target = filepath.Join(exeDir, "exiftool.exe")
-		} else {
-			target = filepath.Join(exeDir, "exiftool")
-		}
-		if info, err := os.Stat(target); err == nil && !info.IsDir() {
-			return target
-		}
+	if path, ok := bundledExiftoolPath(binaryName); ok {
+		return path
 	}
-
-	// 3. Search common absolute installation paths on Unix-like and Windows systems
-	var commonPaths []string
-	if runtime.GOOS == "windows" {
-		commonPaths = []string{
-			`C:\Windows\exiftool.exe`,
-			`C:\Program Files\exiftool\exiftool.exe`,
-			`C:\Program Files (x86)\exiftool\exiftool.exe`,
-		}
-	} else {
-		commonPaths = []string{
-			"/opt/homebrew/bin/exiftool",
-			"/usr/local/bin/exiftool",
-			"/usr/bin/exiftool",
-			"/bin/exiftool",
-		}
+	if path, ok := firstInstalledExiftoolPath(); ok {
+		return path
 	}
-
-	for _, cp := range commonPaths {
-		if info, err := os.Stat(cp); err == nil && !info.IsDir() {
-			if runtime.GOOS == "windows" {
-				return cp
-			}
-			// Check if executable on Unix
-			if info.Mode()&0111 != 0 {
-				return cp
-			}
-		}
-	}
-
 	return binaryName
+}
+
+func validatedConfiguredExiftoolPath(path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(path) || strings.Contains(path, "..") {
+		slog.Warn("configured exiftool path rejected: must be absolute and not contain '..', falling back", "path", path)
+		return "", false
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		slog.Warn("configured exiftool path rejected: not an executable file, falling back", "path", path, "error", err)
+		return "", false
+	}
+	return path, true
+}
+
+func exiftoolBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "exiftool.exe"
+	}
+	return defaultExiftoolBinary
+}
+
+func bundledExiftoolPath(binaryName string) (string, bool) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", false
+	}
+	target := filepath.Join(filepath.Dir(executable), binaryName)
+	info, err := os.Stat(target)
+	return target, err == nil && !info.IsDir()
+}
+
+func firstInstalledExiftoolPath() (string, bool) {
+	paths := []string{"/opt/homebrew/bin/exiftool", "/usr/local/bin/exiftool", "/usr/bin/exiftool", "/bin/exiftool"}
+	if runtime.GOOS == "windows" {
+		paths = []string{`C:\Windows\exiftool.exe`, `C:\Program Files\exiftool\exiftool.exe`, `C:\Program Files (x86)\exiftool\exiftool.exe`}
+	}
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err == nil && !info.IsDir() && (runtime.GOOS == "windows" || info.Mode()&0o111 != 0) {
+			return path, true
+		}
+	}
+	return "", false
 }

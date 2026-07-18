@@ -103,142 +103,142 @@ func (e *DiscoveryEngine) Run(ctx context.Context, events chan<- DiscoveryEvent)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	dirCh := make(chan string, e.dirQueueSize)
-	doneCh := make(chan struct{})
-	var doneOnce sync.Once
-	signalDone := func() {
-		doneOnce.Do(func() { close(doneCh) })
-	}
-
-	var pending atomic.Int64
-	pending.Store(1)
-
-	var errMu sync.Mutex
-	var firstErr error
-	recordError := func(dir string, err error) {
-		errMu.Lock()
-		if firstErr == nil {
-			firstErr = err
-		}
-		errMu.Unlock()
-
-		select {
-		case events <- DiscoveryEvent{Type: DiscoveryEventError, Dir: dir, Err: err}:
-		case <-ctx.Done():
-		}
-		cancel()
-	}
-
-	emitFound := func(relPath string) {
-		select {
-		case events <- DiscoveryEvent{Type: DiscoveryEventFound, RelPath: relPath}:
-		case <-ctx.Done():
-		}
-	}
-
-	dirCh <- e.root
+	run := newDiscoveryRun(e, ctx, cancel, events)
+	run.dirCh <- e.root
 
 	slog.Info("DiscoveryEngine: starting worker pool", "workers", e.workerCount, "root", e.root)
-
 	var workerWg sync.WaitGroup
 	for i := 0; i < e.workerCount; i++ {
 		workerWg.Add(1)
 		utils.SafeGo(func() {
 			defer workerWg.Done()
-
-			for {
-				select {
-				case <-doneCh:
-					return
-				case dir, ok := <-dirCh:
-					if !ok {
-						return
-					}
-
-					stack := []string{dir}
-					for len(stack) > 0 {
-						currentDir := stack[len(stack)-1]
-						stack = stack[:len(stack)-1]
-
-						if ctx.Err() != nil {
-							if pending.Add(-1) == 0 {
-								signalDone()
-							}
-							continue
-						}
-
-						entries, err := e.readDir(currentDir)
-						if err != nil {
-							recordError(currentDir, err)
-							if pending.Add(-1) == 0 {
-								signalDone()
-							}
-							continue
-						}
-
-						for _, d := range entries {
-							if d.Type()&os.ModeSymlink != 0 {
-								continue
-							}
-
-							name := d.Name()
-							if strings.HasPrefix(name, ".") && name != "." {
-								continue
-							}
-
-							if d.IsDir() {
-								if e.ignoreDirs[name] {
-									continue
-								}
-
-								childDir := filepath.Join(currentDir, name)
-								pending.Add(1)
-								select {
-								case dirCh <- childDir:
-								case <-ctx.Done():
-									if pending.Add(-1) == 0 {
-										signalDone()
-									}
-								default:
-									// Saturated queue: process inline in this worker to stay bounded.
-									stack = append(stack, childDir)
-								}
-								continue
-							}
-
-							ext := strings.ToLower(filepath.Ext(name))
-							if !domain.IsSupportedExtension(ext) {
-								continue
-							}
-
-							fullPath := filepath.Join(currentDir, name)
-							rel, err := filepath.Rel(e.root, fullPath)
-							if err != nil {
-								slog.Debug("DiscoveryEngine: filepath.Rel error", "path", fullPath, "error", err)
-								continue
-							}
-
-							emitFound(filepath.ToSlash(rel))
-						}
-
-						if pending.Add(-1) == 0 {
-							signalDone()
-						}
-					}
-				}
-			}
+			run.worker()
 		})
 	}
 
-	<-doneCh
-	close(dirCh)
+	<-run.doneCh
+	close(run.dirCh)
 	workerWg.Wait()
 	slog.Info("DiscoveryEngine: all workers done", "root", e.root)
+	return run.err()
+}
 
-	errMu.Lock()
-	err := firstErr
-	errMu.Unlock()
+type discoveryRun struct {
+	engine   *DiscoveryEngine
+	ctx      context.Context
+	cancel   context.CancelFunc
+	events   chan<- DiscoveryEvent
+	dirCh    chan string
+	doneCh   chan struct{}
+	done     sync.Once
+	pending  atomic.Int64
+	errMu    sync.Mutex
+	firstErr error
+}
 
-	return err
+func newDiscoveryRun(engine *DiscoveryEngine, ctx context.Context, cancel context.CancelFunc, events chan<- DiscoveryEvent) *discoveryRun {
+	run := &discoveryRun{engine: engine, ctx: ctx, cancel: cancel, events: events, dirCh: make(chan string, engine.dirQueueSize), doneCh: make(chan struct{})}
+	run.pending.Store(1)
+	return run
+}
+
+func (r *discoveryRun) worker() {
+	for {
+		select {
+		case <-r.doneCh:
+			return
+		case dir, ok := <-r.dirCh:
+			if !ok {
+				return
+			}
+			r.processStack(dir)
+		}
+	}
+}
+
+func (r *discoveryRun) processStack(initial string) {
+	stack := []string{initial}
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		currentDir := stack[last]
+		stack = stack[:last]
+		if r.ctx.Err() == nil {
+			r.processDirectory(currentDir, &stack)
+		}
+		r.completeDirectory()
+	}
+}
+
+func (r *discoveryRun) processDirectory(dir string, stack *[]string) {
+	entries, err := r.engine.readDir(dir)
+	if err != nil {
+		r.recordError(dir, err)
+		return
+	}
+	for _, entry := range entries {
+		r.processEntry(dir, entry, stack)
+	}
+}
+
+func (r *discoveryRun) processEntry(dir string, entry os.DirEntry, stack *[]string) {
+	name := entry.Name()
+	if entry.Type()&os.ModeSymlink != 0 || (strings.HasPrefix(name, ".") && name != ".") {
+		return
+	}
+	if entry.IsDir() {
+		if !r.engine.ignoreDirs[name] {
+			r.queueDirectory(filepath.Join(dir, name), stack)
+		}
+		return
+	}
+	if !domain.IsSupportedExtension(strings.ToLower(filepath.Ext(name))) {
+		return
+	}
+	fullPath := filepath.Join(dir, name)
+	relPath, err := filepath.Rel(r.engine.root, fullPath)
+	if err != nil {
+		slog.Debug("DiscoveryEngine: filepath.Rel error", "path", fullPath, "error", err)
+		return
+	}
+	r.emit(DiscoveryEvent{Type: DiscoveryEventFound, RelPath: filepath.ToSlash(relPath)})
+}
+
+func (r *discoveryRun) queueDirectory(dir string, stack *[]string) {
+	r.pending.Add(1)
+	select {
+	case r.dirCh <- dir:
+	case <-r.ctx.Done():
+		r.completeDirectory()
+	default:
+		*stack = append(*stack, dir)
+	}
+}
+
+func (r *discoveryRun) completeDirectory() {
+	if r.pending.Add(-1) == 0 {
+		r.done.Do(func() { close(r.doneCh) })
+	}
+}
+
+func (r *discoveryRun) recordError(dir string, err error) {
+	r.errMu.Lock()
+	if r.firstErr == nil {
+		r.firstErr = err
+	}
+	r.errMu.Unlock()
+	r.emit(DiscoveryEvent{Type: DiscoveryEventError, Dir: dir, Err: err})
+	r.cancel()
+}
+
+func (r *discoveryRun) emit(event DiscoveryEvent) {
+	select {
+	case r.events <- event:
+	case <-r.ctx.Done():
+	}
+}
+
+func (r *discoveryRun) err() error {
+	r.errMu.Lock()
+	defer r.errMu.Unlock()
+	return r.firstErr
 }

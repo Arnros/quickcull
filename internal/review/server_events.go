@@ -66,7 +66,10 @@ func (s *Server) applyEvent(ev bus.Event) (bool, bus.Event, error) {
 		Type:    bus.TypeStateUpdated,
 		Payload: bus.StateUpdatedPayload{State: *nextState},
 	})
+	return s.deliverAppliedEvent(appliedEvent, nextState, isStruct, isUndo)
+}
 
+func (s *Server) deliverAppliedEvent(appliedEvent bus.Event, nextState *AppState, isStructural, isUndo bool) (bool, bus.Event, error) {
 	// Batch metadata updates (star/label/rotate) do not map cleanly to one photo delta.
 	// Emit a full state sync so the UI refreshes all changed tiles.
 	if payload, ok := appliedEvent.Payload.(bus.CommandBatchPayload); ok && !batchHasStructuralEvents(payload.Events) {
@@ -84,7 +87,7 @@ func (s *Server) applyEvent(ev bus.Event) (bool, bus.Event, error) {
 	// INTELLIGENT BROADCAST:
 	// If it's a simple metadata change, send a DELTA to the UI to save bandwidth.
 	// If it's a structural change (Undo, Trash), send the FULL state to ensure consistency.
-	if !isStruct {
+	if !isStructural {
 		if s.broadcastDelta(appliedEvent, *nextState) {
 			return true, appliedEvent, nil
 		}
