@@ -93,6 +93,8 @@ func (a *App) OpenFolder(path string) error {
 	if path == "" {
 		return domain.ErrPathRequired
 	}
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
 	if !a.loading.CompareAndSwap(false, true) {
 		slog.Warn("OpenFolder: Load already in progress, skipping request", "path", path)
 		return nil

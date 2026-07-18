@@ -464,3 +464,62 @@ func TestRefreshDiscardsScanWhenFolderChanges(t *testing.T) {
 		t.Fatalf("stale scan overwrote new folder state: %+v", srv.appState)
 	}
 }
+
+func TestOpenFolderWaitsForRefreshTransaction(t *testing.T) {
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(oldRoot, "a.jpg"), []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newRoot, "b.jpg"), []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer()
+	if err := srv.LoadState(oldRoot); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{server: srv}
+
+	refreshEntered := make(chan struct{})
+	releaseRefresh := make(chan struct{})
+	var scanCalls atomic.Int32
+	setScanFilesForTest(t, func(root string, filesChan chan<- string) error {
+		if scanCalls.Add(1) == 1 {
+			close(refreshEntered)
+			<-releaseRefresh
+			filesChan <- "a.jpg"
+		} else {
+			filesChan <- "b.jpg"
+		}
+		close(filesChan)
+		return nil
+	})
+
+	refreshDone := make(chan struct{})
+	go func() {
+		defer close(refreshDone)
+		_, _ = app.Refresh(0)
+	}()
+	<-refreshEntered
+
+	openDone := make(chan error, 1)
+	go func() { openDone <- app.OpenFolder(newRoot) }()
+
+	select {
+	case err := <-openDone:
+		close(releaseRefresh)
+		<-refreshDone
+		t.Fatalf("OpenFolder completed during refresh transaction: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseRefresh)
+	<-refreshDone
+	if err := <-openDone; err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.getState().Root(); got != newRoot {
+		t.Fatalf("final root = %q, want %q", got, newRoot)
+	}
+}

@@ -108,7 +108,7 @@ func (s *Server) ServeFile(w http.ResponseWriter, r *http.Request, path string, 
 	} else {
 		w.Header().Set("Cache-Control", cacheControlRevalidate)
 	}
-	
+
 	slog.Debug("ServeFile: content serving", "path", path, "size", info.Size())
 	http.ServeContent(w, r, filepath.Base(path), info.ModTime(), f)
 	slog.Debug("ServeFile: completed", "path", path)
@@ -308,6 +308,9 @@ func (s *Server) runExport(ctx context.Context, paths []string, destDir string, 
 	for i, relPath := range paths {
 		select {
 		case <-ctx.Done():
+			if movedSomething {
+				s.broadcast(eventFolderChanged, nil)
+			}
 			s.broadcast(eventExportCancelled, nil)
 			return
 		default:

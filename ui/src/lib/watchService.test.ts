@@ -52,4 +52,16 @@ describe('WatchService auto-refresh', () => {
     expect(mockedAppState.currentFile).toBeNull();
     expect(mockedAppState.currentIndex).toBe(0);
   });
+
+  it('loads the backend fallback when the current photo disappears', async () => {
+	  mockedAppState.stats = { total: 2 };
+	  mockedAppState.currentIndex = 1;
+	  mockedAppState.currentFile = { filename: 'b.jpg' };
+	  refresh.mockResolvedValue({ total: 1, index: 0, stats: { total: 1 } });
+
+	  await (watchService as any).tick();
+
+	  expect(loadFile).toHaveBeenCalledOnce();
+	  expect(loadFile).toHaveBeenCalledWith(0);
+  });
 });

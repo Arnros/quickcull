@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { appEventHandlers } = vi.hoisted(() => ({
+  appEventHandlers: {} as Record<string, (data?: unknown) => void | Promise<void>>,
+}));
+
 vi.mock('./api', () => ({
   api: {
+	  onEvent: vi.fn((name: string, handler: (data?: unknown) => void | Promise<void>) => {
+	    appEventHandlers[name] = handler;
+	  }),
     trash: vi.fn(),
     undo: vi.fn(),
     toggleStar: vi.fn(),
@@ -11,6 +18,10 @@ vi.mock('./api', () => ({
     getFolders: vi.fn(),
     getFilters: vi.fn(),
     refresh: vi.fn(),
+	  getConfig: vi.fn(),
+	  getStats: vi.fn(),
+	  getAppState: vi.fn(),
+	  sysCheck: vi.fn(),
   },
 }));
 
@@ -485,5 +496,19 @@ describe('AppState cache-busting on media-changing actions', () => {
 
     expect(appState.canApplyExifWrite()).toBe(false);
     expect(appState.canApplyRotation()).toBe(false);
+  });
+
+  it('refreshes exactly once when the backend emits folder:changed', async () => {
+	  (api.getConfig as any).mockResolvedValue({ autoRefresh: false });
+	  (api.getStats as any).mockResolvedValue({ total: 0 });
+	  (api.getAppState as any).mockResolvedValue({ Root: '', VisibleOrder: [], Photos: {} });
+	  (api.sysCheck as any).mockResolvedValue({ capabilities: {} });
+	  (api.refresh as any).mockResolvedValue({ total: 0, index: -1 });
+
+	  await appState.init();
+	  expect(appEventHandlers['folder:changed']).toBeTypeOf('function');
+
+	  await appEventHandlers['folder:changed']();
+	  await vi.waitFor(() => expect(api.refresh).toHaveBeenCalledTimes(1));
   });
 });

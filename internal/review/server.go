@@ -134,6 +134,10 @@ func (s *Server) SetBroadcastHook(fn func(name string, data any)) {
 
 // LoadState initializes the state for a given path.
 func (s *Server) LoadState(root string) error {
+	// Cache and state resources are replaced during bootstrap. Ensure workers
+	// from the previous lifecycle have stopped reading them first.
+	s.analysisSched.Cancel()
+	s.analysisSched.Wait()
 	s.analysisSched.BeginLoadLifecycle()
 
 	pipeline, err := s.loadStateBootstrap(root)

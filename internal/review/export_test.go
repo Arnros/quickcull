@@ -1,14 +1,31 @@
 package review
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"quickcull/internal/bus"
+	"quickcull/internal/persistence"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 )
+
+type failingMovePersistence struct {
+	persistence.StateStore
+	saveErr     error
+	removeCalls int
+}
+
+func (p *failingMovePersistence) SavePhotoMetadata(string, string, persistence.PhotoMetadata) error {
+	return p.saveErr
+}
+
+func (p *failingMovePersistence) RemovePhotoMetadata(string, string) error {
+	p.removeCalls++
+	return nil
+}
 
 func waitForExport(t *testing.T, srv *Server) {
 	t.Helper()
@@ -289,5 +306,80 @@ func TestPartialMoveFailedFileRemainsAtSource(t *testing.T) {
 	}
 	if _, ok := got.Photos["a.jpg"]; ok {
 		t.Fatal("moved file still in authoritative state")
+	}
+}
+
+func TestCancelledMoveEmitsFolderChangedAfterPartialSuccess(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.jpg", "b.jpg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("jpeg"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dest := t.TempDir()
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var events []string
+	cancelled := make(chan struct{})
+	var cancelOnce sync.Once
+	srv.SetBroadcastHook(func(name string, data any) {
+		mu.Lock()
+		events = append(events, name)
+		mu.Unlock()
+		if name == eventExportProgress && data.(map[string]any)["current"].(int) == 1 {
+			srv.CancelExport()
+		}
+		if name == eventExportCancelled {
+			cancelOnce.Do(func() { close(cancelled) })
+		}
+	})
+
+	if err := srv.ExportFilesPaths([]string{"a.jpg", "b.jpg"}, dest, true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for export cancellation")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if slices.Index(events, eventFolderChanged) < 0 {
+		t.Fatalf("partial cancelled move did not emit folder:changed: %v", events)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "a.jpg")); err != nil {
+		t.Fatalf("first file was not moved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "b.jpg")); err != nil {
+		t.Fatalf("unprocessed file did not remain at source: %v", err)
+	}
+}
+
+func TestMoveMetadataSaveFailureKeepsSourceMetadata(t *testing.T) {
+	root := t.TempDir()
+	dest := t.TempDir()
+	srv := NewServer()
+	srv.appState = &AppState{
+		Root: root,
+		Photos: map[string]Photo{
+			"a.jpg": {ID: "a.jpg", IsStarred: true, Label: 4},
+		},
+		VisibleOrder: []string{"a.jpg"},
+	}
+	store := &failingMovePersistence{saveErr: errors.New("destination persistence unavailable")}
+	srv.persistence = store
+
+	srv.transferMovedMetadata("a.jpg", dest, filepath.Join(dest, "a.jpg"))
+
+	if store.removeCalls != 0 {
+		t.Fatalf("source metadata removed after destination save failure: %d calls", store.removeCalls)
+	}
+	if p := srv.appState.Photos["a.jpg"]; !p.IsStarred || p.Label != 4 {
+		t.Fatalf("in-memory source metadata changed: %+v", p)
 	}
 }
