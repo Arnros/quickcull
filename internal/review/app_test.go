@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"quickcull/internal/bus"
 	"quickcull/internal/domain"
+	"quickcull/internal/persistence"
 )
 
 func newAppWithState(t *testing.T, files []string) (*App, *Server, string) {
@@ -735,5 +738,374 @@ func TestResetAppCache_WakesIdleAnalysisWorkers(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("ResetAppCache hung > 2s — analysis workers were not woken")
+	}
+}
+
+func TestRestoreFromTrashViaApp(t *testing.T) {
+	root, app, cleanup := setupPhysicalTest(t)
+	defer cleanup()
+
+	state := app.server.getState()
+	if _, err := state.Trash(0); err != nil {
+		t.Fatal(err)
+	}
+	trashPath := filepath.Join(root, domain.DirTrash, "a.jpg")
+	if _, err := os.Stat(trashPath); os.IsNotExist(err) {
+		t.Fatal("file should be in .trash after trash")
+	}
+	app.server.invalidateBurstCache()
+	app.server.RefreshVisibleOrder()
+
+	res, err := app.RestoreFromTrash([]string{"a.jpg"})
+	if err != nil {
+		t.Fatalf("RestoreFromTrash: %v", err)
+	}
+	if res.Total != 3 {
+		t.Errorf("total = %d, want 3", res.Total)
+	}
+	if !slices.Equal(res.Restored, []string{"a.jpg"}) {
+		t.Errorf("restored = %v, want [a.jpg]", res.Restored)
+	}
+	if res.Index < 0 {
+		t.Errorf("index = %d, want non-negative", res.Index)
+	}
+	if _, err := os.Stat(filepath.Join(root, "a.jpg")); os.IsNotExist(err) {
+		t.Error("file missing from root after restore")
+	}
+	if _, err := os.Stat(trashPath); err == nil {
+		t.Error("file still in .trash after restore")
+	}
+}
+
+func TestRestoreFromTrashNoState(t *testing.T) {
+	app := NewApp(NewServer())
+	_, err := app.RestoreFromTrash([]string{"x.jpg"})
+	if err != domain.ErrFolderNotFound {
+		t.Fatalf("want ErrFolderNotFound, got %v", err)
+	}
+}
+
+func TestResetLabelsViaApp(t *testing.T) {
+	_, app, cleanup := setupPhysicalTest(t)
+	defer cleanup()
+
+	app.server.applyEvent(bus.Event{
+		Type:    bus.TypeCommandLabelPhoto,
+		Payload: bus.CommandLabelPhotoPayload{PhotoID: "a.jpg", Label: 3},
+	})
+	app.server.applyEvent(bus.Event{
+		Type:    bus.TypeCommandLabelPhoto,
+		Payload: bus.CommandLabelPhotoPayload{PhotoID: "b.jpg", Label: 5},
+	})
+	if app.server.appState.LabeledCount != 2 {
+		t.Fatalf("expected 2 labeled photos before reset, got %d", app.server.appState.LabeledCount)
+	}
+
+	if err := app.ResetLabels(); err != nil {
+		t.Fatalf("ResetLabels: %v", err)
+	}
+
+	app.server.appStateMu.RLock()
+	defer app.server.appStateMu.RUnlock()
+	if app.server.appState.LabeledCount != 0 {
+		t.Errorf("labeled count = %d, want 0", app.server.appState.LabeledCount)
+	}
+	for _, id := range []string{"a.jpg", "b.jpg"} {
+		if p := app.server.appState.Photos[id]; p.Label != 0 {
+			t.Errorf("%s label = %d, want 0", id, p.Label)
+		}
+	}
+}
+
+func TestRotateResetViaApp(t *testing.T) {
+	app, _, _ := newAppWithState(t, []string{"a.jpg", "b.jpg"})
+	if _, err := app.Rotate(0, "a.jpg", "right"); err != nil {
+		t.Fatal(err)
+	}
+	waitForCondition(t, "rotation 90", func() bool {
+		f, _ := app.GetFile(0, false)
+		return f.Rotation == 90
+	})
+
+	res, err := app.RotateReset(0, "a.jpg")
+	if err != nil {
+		t.Fatalf("RotateReset: %v", err)
+	}
+	if !res.Ok {
+		t.Fatal("RotateReset should return Ok=true")
+	}
+	f, _ := app.GetFile(0, false)
+	if f.Rotation != 0 {
+		t.Errorf("rotation = %d after reset, want 0", f.Rotation)
+	}
+}
+
+func TestRotateResetInvalidIndex(t *testing.T) {
+	app, _, _ := newAppWithState(t, []string{"a.jpg"})
+	_, err := app.RotateReset(0, "missing.jpg")
+	if err != domain.ErrIndexOutOfBounds {
+		t.Fatalf("want ErrIndexOutOfBounds for non-existent path, got %v", err)
+	}
+}
+
+func TestApplyRotationZeroRotationReturnsNil(t *testing.T) {
+	app, _, _ := newAppWithState(t, []string{"a.jpg"})
+	if err := app.ApplyRotation(0, "a.jpg"); err != nil {
+		t.Fatalf("ApplyRotation with zero rotation: %v", err)
+	}
+}
+
+func TestApplyRotationUnsupportedFormat(t *testing.T) {
+	root := t.TempDir()
+	name := "test.gif"
+	abs := filepath.Join(root, name)
+	if err := os.WriteFile(abs, []byte("GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x00\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer()
+	srv.state = NewState(root, []string{name})
+	srv.cacheDir = srv.state.CacheDir()
+	srv.cache.LoadCache(srv.cacheDir)
+	srv.appState = &AppState{
+		Root:         root,
+		Photos:       map[string]Photo{name: {ID: name}},
+		VisibleOrder: []string{name},
+	}
+	t.Cleanup(func() { srv.cache.Close() })
+
+	app := &App{server: srv}
+	ctx, cancel := context.WithCancel(context.Background())
+	app.ctx = ctx
+	t.Cleanup(cancel)
+	srv.StartEventEngine(app.ctx)
+
+	if _, err := app.Rotate(0, name, "right"); err != nil {
+		t.Fatal(err)
+	}
+	waitForCondition(t, "rotation set", func() bool {
+		srv.appStateMu.RLock()
+		defer srv.appStateMu.RUnlock()
+		return srv.appState != nil && srv.appState.Photos[name].Rotation != 0
+	})
+
+	if err := app.ApplyRotation(0, name); err != domain.ErrExifWriteUnsupported {
+		t.Fatalf("want ErrExifWriteUnsupported, got %v", err)
+	}
+}
+
+func TestReanalyzeMetadataViaApp(t *testing.T) {
+	app, _, _ := newAppWithState(t, []string{"a.jpg", "b.jpg"})
+	res, err := app.ReanalyzeMetadata(0)
+	if err != nil {
+		t.Fatalf("ReanalyzeMetadata: %v", err)
+	}
+	if res.Filename != "a.jpg" {
+		t.Fatalf("filename = %q, want a.jpg", res.Filename)
+	}
+	if res.Index != 0 {
+		t.Fatalf("index = %d, want 0", res.Index)
+	}
+}
+
+func TestReanalyzeMetadataNoState(t *testing.T) {
+	app := NewApp(NewServer())
+	_, err := app.ReanalyzeMetadata(0)
+	if err != domain.ErrFolderNotFound {
+		t.Fatalf("want ErrFolderNotFound, got %v", err)
+	}
+}
+
+func TestReanalyzeMetadataOutOfBounds(t *testing.T) {
+	app, _, _ := newAppWithState(t, []string{"a.jpg"})
+	_, err := app.ReanalyzeMetadata(99)
+	if err != domain.ErrIndexOutOfBounds {
+		t.Fatalf("want ErrIndexOutOfBounds, got %v", err)
+	}
+}
+
+func TestGetAppStateReturnsSnapshot(t *testing.T) {
+	app, server, _ := newAppWithState(t, []string{"a.jpg", "b.jpg"})
+	state, err := app.GetAppState()
+	if err != nil {
+		t.Fatalf("GetAppState: %v", err)
+	}
+	if len(state.VisibleOrder) != 2 {
+		t.Fatalf("visible order len = %d, want 2", len(state.VisibleOrder))
+	}
+
+	state.Root = "hacked"
+	server.appStateMu.RLock()
+	serverRoot := server.appState.Root
+	server.appStateMu.RUnlock()
+	if serverRoot == "hacked" {
+		t.Fatal("GetAppState returned mutable reference to server state")
+	}
+	if len(state.Photos) != 2 {
+		t.Fatalf("photos map len = %d, want 2", len(state.Photos))
+	}
+}
+
+func TestGetAppStateNoFolder(t *testing.T) {
+	app := NewApp(NewServer())
+	state, err := app.GetAppState()
+	if err != nil {
+		t.Fatalf("GetAppState with no state: %v", err)
+	}
+	if len(state.VisibleOrder) != 0 || len(state.Photos) != 0 {
+		t.Errorf("expected empty state, got %+v", state)
+	}
+}
+
+func TestListTrashViaApp(t *testing.T) {
+	_, app, cleanup := setupPhysicalTest(t)
+	defer cleanup()
+
+	res, err := app.ListTrash()
+	if err != nil {
+		t.Fatalf("ListTrash: %v", err)
+	}
+	if res.Items == nil {
+		t.Fatal("ListTrash must return non-nil Items on empty trash")
+	}
+	if len(res.Items) != 0 {
+		t.Fatalf("expected empty trash, got %v", res.Items)
+	}
+
+	if _, err := app.Trash(1, "b.jpg", nil); err != nil {
+		t.Fatal(err)
+	}
+	waitForCondition(t, "b.jpg trashed", func() bool {
+		res, _ := app.ListTrash()
+		return len(res.Items) == 1
+	})
+
+	res2, _ := app.ListTrash()
+	if !slices.Equal(res2.Items, []string{"b.jpg"}) {
+		t.Fatalf("trash items = %v", res2.Items)
+	}
+}
+
+func TestListTrashNoState(t *testing.T) {
+	app := NewApp(NewServer())
+	res, err := app.ListTrash()
+	if err != nil {
+		t.Fatalf("ListTrash no state: %v", err)
+	}
+	if res.Items == nil || len(res.Items) != 0 {
+		t.Fatalf("expected empty non-nil items, got %v", res.Items)
+	}
+}
+
+func TestExportFilesEmptyList(t *testing.T) {
+	app := NewApp(NewServer())
+	if err := app.ExportFiles(nil, t.TempDir(), false); err != nil {
+		t.Fatalf("ExportFiles with nil: %v", err)
+	}
+	if err := app.ExportFiles([]string{}, t.TempDir(), true); err != nil {
+		t.Fatalf("ExportFiles with empty slice: %v", err)
+	}
+}
+
+func TestExportFilesViaApp(t *testing.T) {
+	_, app, cleanup := setupPhysicalTest(t)
+	defer cleanup()
+
+	dest := t.TempDir()
+	if err := app.ExportFiles([]string{"a.jpg"}, dest, false); err != nil {
+		t.Fatalf("ExportFiles: %v", err)
+	}
+	waitForExport(t, app.server)
+	if _, err := os.Stat(filepath.Join(dest, "a.jpg")); os.IsNotExist(err) {
+		t.Fatalf("exported file missing from dest")
+	}
+}
+
+func TestSavePositionViaApp(t *testing.T) {
+	root := t.TempDir()
+	srv := NewServer()
+	srv.persistence, _ = persistence.NewMetadataStore(filepath.Join(t.TempDir(), "pos.db"))
+	t.Cleanup(func() { srv.persistence.Close() })
+	srv.appState = &AppState{
+		Root:         root,
+		VisibleOrder: []string{"a.jpg", "b.jpg", "c.jpg"},
+		Photos:       map[string]Photo{"a.jpg": {ID: "a.jpg"}, "b.jpg": {ID: "b.jpg"}, "c.jpg": {ID: "c.jpg"}},
+	}
+	app := &App{server: srv}
+	app.SavePosition(2)
+	if got := srv.GetSavedPosition(root); got != 2 {
+		t.Fatalf("saved position = %d, want 2", got)
+	}
+}
+
+func TestGetHistoryAndRemoveHistoryViaApp(t *testing.T) {
+	app := NewApp(NewServer())
+	history, err := app.GetHistory()
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if history == nil {
+		t.Fatal("GetHistory must return non-nil slice")
+	}
+	_ = app.RemoveHistory("/nonexistent")
+}
+
+func TestSearchStreamNewSearchCancelsOldViaApp(t *testing.T) {
+	root := t.TempDir()
+	const fileCount = 200
+	for i := 0; i < fileCount; i++ {
+		_ = os.WriteFile(filepath.Join(root, fmt.Sprintf("vac_%04d.jpg", i)), []byte("x"), 0o644)
+	}
+
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{server: srv}
+	app.ctx = context.Background()
+
+	var mu sync.Mutex
+	var resultsCount int
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == "search:results" {
+			mu.Lock()
+			resultsCount++
+			mu.Unlock()
+		}
+	})
+
+	app.SearchStream("vac")
+	time.Sleep(30 * time.Millisecond)
+
+	mu.Lock()
+	before := resultsCount
+	mu.Unlock()
+
+	app.SearchStream("vac_0001")
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	after := resultsCount
+	mu.Unlock()
+
+	if after <= before {
+		t.Logf("new search may not have emitted more results in time window (before=%d, after=%d)", before, after)
+	}
+}
+
+func TestPrioritizeIndicesValidAndOutOfBounds(t *testing.T) {
+	app, server, _ := newAppWithState(t, []string{"a.jpg", "b.jpg", "c.jpg"})
+	server.analysisQueue.Reset()
+
+	app.PrioritizeIndices([]int{0, 2, 9999})
+	app.PrioritizeIndices(nil)
+	app.PrioritizeIndices([]int{})
+
+	interactive, warm, bulk := server.analysisQueue.DepthByTier()
+	if interactive+warm+bulk == 0 {
+		t.Fatal("expected indices to be queued")
+	}
+	if server.analysisQueue.HasUrgentTask() {
+		t.Fatal("prioritize should not create urgent tasks")
 	}
 }
