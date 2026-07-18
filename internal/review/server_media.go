@@ -290,6 +290,7 @@ func (s *Server) runExport(ctx context.Context, paths []string, destDir string, 
 	if state == nil {
 		return
 	}
+	root := state.Root()
 
 	defer func() {
 		s.exportMu.Lock()
@@ -304,6 +305,7 @@ func (s *Server) runExport(ctx context.Context, paths []string, destDir string, 
 
 	total := len(paths)
 	movedSomething := false
+	movedPaths := make([]string, 0, total)
 
 	for i, relPath := range paths {
 		select {
@@ -311,7 +313,10 @@ func (s *Server) runExport(ctx context.Context, paths []string, destDir string, 
 			if movedSomething {
 				s.broadcast(eventFolderChanged, nil)
 			}
-			s.broadcast(eventExportCancelled, nil)
+			s.broadcast(eventExportCancelled, map[string]any{
+				"root":       root,
+				"movedPaths": movedPaths,
+			})
 			return
 		default:
 		}
@@ -323,11 +328,14 @@ func (s *Server) runExport(ctx context.Context, paths []string, destDir string, 
 
 		absDest := s.resolveExportDest(destDir, absSrc)
 
-		if err := s.exportSingleFile(absSrc, absDest, move, &movedSomething); err != nil {
+		fileMoved := false
+		if err := s.exportSingleFile(absSrc, absDest, move, &fileMoved); err != nil {
 			slog.Error("Export operation failed", "src", absSrc, "dest", absDest, "move", move, "error", err)
 			continue
 		}
-		if move {
+		if fileMoved {
+			movedSomething = true
+			movedPaths = append(movedPaths, relPath)
 			s.transferMovedMetadata(relPath, destDir, absDest)
 		}
 
@@ -345,7 +353,9 @@ func (s *Server) runExport(ctx context.Context, paths []string, destDir string, 
 	}
 
 	s.broadcast(eventExportComplete, map[string]any{
-		"total": total,
+		"total":      total,
+		"root":       root,
+		"movedPaths": movedPaths,
 	})
 }
 

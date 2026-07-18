@@ -122,6 +122,27 @@ describe('syncService cache busting on structural sync', () => {
     expect(Object.keys(appState.v2.Photos)).toEqual(['fresh.jpg']);
   });
 
+  it('updates export-related counts from the authoritative structural sync', async () => {
+    const appState = makeSyncAppState({
+      'red.jpg': { ID: 'red.jpg', IsStarred: true, Label: 1, Rotation: 0, IsTrashed: false },
+      'keep.jpg': { ID: 'keep.jpg', IsStarred: false, Label: 0, Rotation: 0, IsTrashed: false },
+    }, ['red.jpg', 'keep.jpg']);
+    syncService.init(appState);
+
+    await handlers.SyncState?.({
+      Root: '/media', CacheDir: '', IsPartial: false,
+      VisibleOrder: ['keep.jpg'],
+      Photos: {
+        'keep.jpg': { ID: 'keep.jpg', IsStarred: false, Label: 0, Rotation: 0, IsTrashed: false },
+      },
+      TrashedCount: 0, StarredCount: 0, LabeledCount: 0, RotatedCount: 0, UndoLen: 0,
+    });
+
+    expect(appState.stats.total).toBe(1);
+    expect(appState.stats.starredCount).toBe(0);
+    expect(appState.stats.labeledCount).toBe(0);
+  });
+
   it('updates currentFile metadata from structural sync', async () => {
     const appState = makeSyncAppState({
       'a.jpg': { ID: 'a.jpg', IsStarred: true, Label: 2, Rotation: 90, IsTrashed: false },

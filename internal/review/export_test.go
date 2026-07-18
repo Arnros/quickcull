@@ -247,12 +247,16 @@ func TestPartialMoveFailedFileRemainsAtSource(t *testing.T) {
 	var eventsMu sync.Mutex
 	var events []string
 	var snapshots []AppStateDTO
+	var exportCompletePayload map[string]any
 	srv.SetBroadcastHook(func(name string, data any) {
 		eventsMu.Lock()
 		defer eventsMu.Unlock()
 		events = append(events, name)
 		if name == eventSyncState {
 			snapshots = append(snapshots, data.(AppStateDTO))
+		}
+		if name == eventExportComplete {
+			exportCompletePayload = data.(map[string]any)
 		}
 	})
 
@@ -307,6 +311,12 @@ func TestPartialMoveFailedFileRemainsAtSource(t *testing.T) {
 	if _, ok := got.Photos["a.jpg"]; ok {
 		t.Fatal("moved file still in authoritative state")
 	}
+	if exportCompletePayload["root"] != root {
+		t.Fatalf("export root = %v, want %s", exportCompletePayload["root"], root)
+	}
+	if moved, ok := exportCompletePayload["movedPaths"].([]string); !ok || !slices.Equal(moved, []string{"a.jpg"}) {
+		t.Fatalf("movedPaths = %#v, want [a.jpg]", exportCompletePayload["movedPaths"])
+	}
 }
 
 func TestCancelledMoveEmitsFolderChangedAfterPartialSuccess(t *testing.T) {
@@ -324,6 +334,7 @@ func TestCancelledMoveEmitsFolderChangedAfterPartialSuccess(t *testing.T) {
 
 	var mu sync.Mutex
 	var events []string
+	var cancelledPayload map[string]any
 	cancelled := make(chan struct{})
 	var cancelOnce sync.Once
 	srv.SetBroadcastHook(func(name string, data any) {
@@ -334,6 +345,7 @@ func TestCancelledMoveEmitsFolderChangedAfterPartialSuccess(t *testing.T) {
 			srv.CancelExport()
 		}
 		if name == eventExportCancelled {
+			cancelledPayload, _ = data.(map[string]any)
 			cancelOnce.Do(func() { close(cancelled) })
 		}
 	})
@@ -358,6 +370,12 @@ func TestCancelledMoveEmitsFolderChangedAfterPartialSuccess(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "b.jpg")); err != nil {
 		t.Fatalf("unprocessed file did not remain at source: %v", err)
 	}
+	if cancelledPayload["root"] != root {
+		t.Fatalf("cancelled export root = %v, want %s", cancelledPayload["root"], root)
+	}
+	if moved, ok := cancelledPayload["movedPaths"].([]string); !ok || !slices.Equal(moved, []string{"a.jpg"}) {
+		t.Fatalf("cancelled movedPaths = %#v, want [a.jpg]", cancelledPayload["movedPaths"])
+	}
 }
 
 func TestMoveMetadataSaveFailureKeepsSourceMetadata(t *testing.T) {
@@ -381,5 +399,207 @@ func TestMoveMetadataSaveFailureKeepsSourceMetadata(t *testing.T) {
 	}
 	if p := srv.appState.Photos["a.jpg"]; !p.IsStarred || p.Label != 4 {
 		t.Fatalf("in-memory source metadata changed: %+v", p)
+	}
+}
+
+func TestExportSelectionLabelZeroReportsAllNonZeroLabels(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"red.jpg", "blue.jpg", "none.jpg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("jpeg"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dest := t.TempDir()
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	for id, label := range map[string]int{"red.jpg": 1, "blue.jpg": 2} {
+		if _, _, err := srv.applyEvent(bus.Event{
+			Type: bus.TypeCommandLabelPhoto,
+			Payload: bus.CommandLabelPhotoPayload{PhotoID: id, Label: label},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	complete := make(chan map[string]any, 1)
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == eventExportComplete {
+			complete <- data.(map[string]any)
+		}
+	})
+	app := &App{server: srv}
+	if err := app.ExportSelection("label", 0, dest, true); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case payload := <-complete:
+		moved, ok := payload["movedPaths"].([]string)
+		if !ok {
+			t.Fatalf("movedPaths type = %T", payload["movedPaths"])
+		}
+		slices.Sort(moved)
+		if !slices.Equal(moved, []string{"blue.jpg", "red.jpg"}) {
+			t.Fatalf("movedPaths = %v", moved)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for export completion")
+	}
+	if _, err := os.Stat(filepath.Join(root, "none.jpg")); err != nil {
+		t.Fatalf("unlabelled photo should remain: %v", err)
+	}
+}
+
+func TestExportSelectionStarredReportsOnlyStarredPaths(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"star.jpg", "plain.jpg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("jpeg"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := srv.applyEvent(bus.Event{
+		Type: bus.TypeCommandToggleStar,
+		Payload: bus.CommandToggleStarPayload{PhotoID: "star.jpg", Starred: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	complete := make(chan map[string]any, 1)
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == eventExportComplete {
+			complete <- data.(map[string]any)
+		}
+	})
+	if err := (&App{server: srv}).ExportSelection("starred", 0, t.TempDir(), true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case payload := <-complete:
+		if moved, ok := payload["movedPaths"].([]string); !ok || !slices.Equal(moved, []string{"star.jpg"}) {
+			t.Fatalf("movedPaths = %#v, want [star.jpg]", payload["movedPaths"])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for starred export")
+	}
+}
+
+func TestMoveReportsRelativePathsForSameBasenameInSubfolders(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"one/same.jpg", "two/same.jpg"} {
+		abs := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(abs, []byte(rel), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	complete := make(chan map[string]any, 1)
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == eventExportComplete {
+			complete <- data.(map[string]any)
+		}
+	})
+	paths := []string{"one/same.jpg", "two/same.jpg"}
+	if err := srv.ExportFilesPaths(paths, t.TempDir(), true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case payload := <-complete:
+		moved := payload["movedPaths"].([]string)
+		if !slices.Equal(moved, paths) {
+			t.Fatalf("movedPaths = %v, want %v", moved, paths)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for nested export")
+	}
+}
+
+func TestSecondExportCancelsFirstWithoutMixingMovedPaths(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.jpg", "b.jpg", "c.jpg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("jpeg"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := NewServer()
+	if err := srv.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	cancelled := make(chan map[string]any, 1)
+	complete := make(chan map[string]any, 1)
+	var startSecond sync.Once
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == eventExportProgress && data.(map[string]any)["file"] == "a.jpg" {
+			startSecond.Do(func() {
+				if err := srv.ExportFilesPaths([]string{"c.jpg"}, dest, true); err != nil {
+					t.Errorf("second export: %v", err)
+				}
+			})
+		}
+		if name == eventExportCancelled {
+			cancelled <- data.(map[string]any)
+		}
+		if name == eventExportComplete {
+			complete <- data.(map[string]any)
+		}
+	})
+	if err := srv.ExportFilesPaths([]string{"a.jpg", "b.jpg"}, dest, true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case payload := <-cancelled:
+		if moved := payload["movedPaths"].([]string); !slices.Equal(moved, []string{"a.jpg"}) {
+			t.Fatalf("cancelled movedPaths = %v", moved)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first export cancellation")
+	}
+	select {
+	case payload := <-complete:
+		if moved := payload["movedPaths"].([]string); !slices.Equal(moved, []string{"c.jpg"}) {
+			t.Fatalf("second movedPaths = %v", moved)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for second export completion")
+	}
+}
+
+func TestMoveDoesNotReportPathWhenSourceRemovalFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission failure cannot be reproduced as root")
+	}
+	sourceDir := t.TempDir()
+	source := filepath.Join(sourceDir, "photo.jpg")
+	if err := os.WriteFile(source, []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sourceDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sourceDir, 0o755) })
+	destination := filepath.Join(t.TempDir(), "photo.jpg")
+	moved := false
+
+	err := (&Server{}).exportSingleFile(source, destination, true, &moved)
+
+	if err != nil {
+		t.Fatalf("copy fallback should succeed even when source removal fails: %v", err)
+	}
+	if moved {
+		t.Fatal("path reported moved although source removal failed")
+	}
+	if _, err := os.Stat(source); err != nil {
+		t.Fatalf("source should remain: %v", err)
 	}
 }

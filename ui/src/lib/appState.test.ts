@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/svelte';
 
 const { appEventHandlers } = vi.hoisted(() => ({
   appEventHandlers: {} as Record<string, (data?: unknown) => void | Promise<void>>,
@@ -18,6 +19,9 @@ vi.mock('./api', () => ({
     getFolders: vi.fn(),
     getFilters: vi.fn(),
     refresh: vi.fn(),
+	  browseDialog: vi.fn(),
+	  exportFiles: vi.fn(),
+	  exportSelection: vi.fn(),
 	  getConfig: vi.fn(),
 	  getStats: vi.fn(),
 	  getAppState: vi.fn(),
@@ -44,6 +48,8 @@ vi.mock('./toast.svelte', () => ({
   toastService: {
     success: vi.fn(),
     error: vi.fn(),
+    show: vi.fn(),
+    info: vi.fn(),
   },
 }));
 
@@ -473,6 +479,303 @@ describe('AppState cache-busting on media-changing actions', () => {
 
     expect(api.setLabel).toHaveBeenCalledWith(undefined, undefined, ['a.jpg', 'b.jpg'], 3);
     expect(appState.selectedIndices).toEqual([0, 1]);
+  });
+
+  it('updates selected photo labels immediately after a successful batch action', async () => {
+    (api.setLabel as any).mockResolvedValue({ ok: true });
+    appState.selectedIndices = [0, 1];
+    appState.currentIndex = 0;
+    appState.v2 = {
+      ...appState.v2!,
+      VisibleOrder: ['a.jpg', 'b.jpg'],
+      Photos: {
+        'a.jpg': { ID: 'a.jpg', IsStarred: false, Rotation: 0, Label: 0, IsTrashed: false },
+        'b.jpg': { ID: 'b.jpg', IsStarred: false, Rotation: 0, Label: 0, IsTrashed: false },
+      },
+    } as any;
+
+    await appState.setLabel(3);
+
+    expect(appState.v2?.Photos['a.jpg'].Label).toBe(3);
+    expect(appState.v2?.Photos['b.jpg'].Label).toBe(3);
+  });
+
+  it('applies the requested label to every photo in a mixed batch selection', async () => {
+    (api.setLabel as any).mockResolvedValue({ ok: true });
+    appState.selectedIndices = [0, 1];
+    appState.v2 = {
+      ...appState.v2!,
+      Photos: {
+        'a.jpg': { ...appState.v2!.Photos['a.jpg'], Label: 3 },
+        'b.jpg': { ...appState.v2!.Photos['b.jpg'], Label: 0 },
+      },
+    };
+
+    await appState.setLabel(3);
+
+    expect(api.setLabel).toHaveBeenCalledWith(undefined, undefined, ['a.jpg', 'b.jpg'], 3);
+    expect(appState.v2?.Photos['a.jpg'].Label).toBe(3);
+    expect(appState.v2?.Photos['b.jpg'].Label).toBe(3);
+  });
+
+  it('clears the requested label from every photo when the whole batch already has it', async () => {
+    (api.setLabel as any).mockResolvedValue({ ok: true });
+    appState.selectedIndices = [0, 1];
+    appState.currentFile = { ...appState.currentFile!, label: 3 } as any;
+    appState.v2 = {
+      ...appState.v2!,
+      Photos: {
+        'a.jpg': { ...appState.v2!.Photos['a.jpg'], Label: 3 },
+        'b.jpg': { ...appState.v2!.Photos['b.jpg'], Label: 3 },
+      },
+    };
+
+    await appState.setLabel(3);
+
+    expect(api.setLabel).toHaveBeenCalledWith(undefined, undefined, ['a.jpg', 'b.jpg'], 0);
+    expect(appState.currentFile?.label).toBe(0);
+    expect(appState.v2?.Photos['a.jpg'].Label).toBe(0);
+    expect(appState.v2?.Photos['b.jpg'].Label).toBe(0);
+  });
+
+  it('refreshes photo, grid, and filmstrip labels after a successful single action', async () => {
+    const { default: LabelViews } = await import('./components/LabelViews.test.svelte');
+    (api.setLabel as any).mockResolvedValue({ ok: true });
+    render(LabelViews);
+
+    expect(screen.queryByTestId('grid-label')).toBeNull();
+    expect(screen.queryByTestId('filmstrip-label')).toBeNull();
+
+    await appState.setLabel(2);
+
+    expect(appState.currentFile?.label).toBe(2);
+    await waitFor(() => {
+      expect(screen.getByTestId('grid-label').textContent).toBe('2');
+      expect(screen.getByTestId('filmstrip-label').textContent).toBe('2');
+    });
+  });
+
+  it('clears photo and grid labels when applying the active label again', async () => {
+    (api.setLabel as any).mockResolvedValue({ ok: true });
+    appState.currentFile = { ...appState.currentFile!, label: 2 } as any;
+    appState.v2 = {
+      ...appState.v2!,
+      Photos: {
+        ...appState.v2!.Photos,
+        'a.jpg': { ...appState.v2!.Photos['a.jpg'], Label: 2 },
+      },
+    };
+
+    await appState.setLabel(2);
+
+    expect(api.setLabel).toHaveBeenCalledWith(0, 'a.jpg', undefined, 0);
+    expect(appState.currentFile?.label).toBe(0);
+    expect(appState.v2?.Photos['a.jpg'].Label).toBe(0);
+  });
+
+  it('keeps photo and grid labels unchanged when the backend rejects the action', async () => {
+    (api.setLabel as any).mockRejectedValue(new Error('write failed'));
+
+    await appState.setLabel(4);
+
+    expect(appState.currentFile?.label).toBe(0);
+    expect(appState.v2?.Photos['a.jpg'].Label).toBe(0);
+  });
+
+  it('does not expose moved filtered photos when filters are reset before structural sync', async () => {
+    (api.browseDialog as any).mockResolvedValue({ path: '/remote' });
+    (api.exportFiles as any).mockResolvedValue(undefined);
+    appState.filterMode = 'label';
+    appState.activeLabelFilter = 1;
+    appState.filteredIndices = [0, 1, 2];
+    appState.selectedIndices = [0, 1, 2];
+    appState.v2 = {
+      ...appState.v2!,
+      VisibleOrder: ['red-1.jpg', 'red-2.jpg', 'red-3.jpg', 'keep.jpg'],
+      Photos: {
+        'red-1.jpg': { ID: 'red-1.jpg', IsStarred: false, Rotation: 0, Label: 1, IsTrashed: false },
+        'red-2.jpg': { ID: 'red-2.jpg', IsStarred: false, Rotation: 0, Label: 1, IsTrashed: false },
+        'red-3.jpg': { ID: 'red-3.jpg', IsStarred: false, Rotation: 0, Label: 1, IsTrashed: false },
+        'keep.jpg': { ID: 'keep.jpg', IsStarred: false, Rotation: 0, Label: 0, IsTrashed: false },
+      },
+    } as any;
+
+    await appState.exportSelected(true);
+
+    expect(appState.v2?.VisibleOrder).toEqual(['red-1.jpg', 'red-2.jpg', 'red-3.jpg', 'keep.jpg']);
+    (appState as any).onExportComplete({
+      root: '',
+      movedPaths: ['red-1.jpg', 'red-2.jpg', 'red-3.jpg'],
+    });
+    appState.clearAllFilters();
+
+    expect(api.exportFiles).toHaveBeenCalledWith(
+      ['red-1.jpg', 'red-2.jpg', 'red-3.jpg'],
+      '/remote',
+      true,
+    );
+    expect(appState.v2?.VisibleOrder).toEqual(['keep.jpg']);
+    expect(Object.keys(appState.v2?.Photos ?? {})).toEqual(['keep.jpg']);
+  });
+
+  it('removes moved label matches before resetting the label filter', async () => {
+    (api.browseDialog as any).mockResolvedValue({ path: '/remote' });
+    (api.exportSelection as any).mockResolvedValue(undefined);
+    appState.filterMode = 'label';
+    appState.activeLabelFilter = 1;
+    appState.filteredIndices = [0, 1, 2];
+    appState.selectedIndices = [];
+    appState.v2 = {
+      ...appState.v2!,
+      VisibleOrder: ['red-1.jpg', 'red-2.jpg', 'red-3.jpg', 'keep.jpg'],
+      Photos: {
+        'red-1.jpg': { ID: 'red-1.jpg', IsStarred: false, Rotation: 0, Label: 1, IsTrashed: false },
+        'red-2.jpg': { ID: 'red-2.jpg', IsStarred: false, Rotation: 0, Label: 1, IsTrashed: false },
+        'red-3.jpg': { ID: 'red-3.jpg', IsStarred: false, Rotation: 0, Label: 1, IsTrashed: false },
+        'keep.jpg': { ID: 'keep.jpg', IsStarred: false, Rotation: 0, Label: 0, IsTrashed: false },
+      },
+    } as any;
+
+    await appState.exportSelection('label', 1, true);
+
+    expect(appState.v2?.VisibleOrder).toEqual(['red-1.jpg', 'red-2.jpg', 'red-3.jpg', 'keep.jpg']);
+    (appState as any).onExportComplete({
+      root: '',
+      movedPaths: ['red-1.jpg', 'red-2.jpg', 'red-3.jpg'],
+    });
+    appState.clearAllFilters();
+
+    expect(api.exportSelection).toHaveBeenCalledWith('label', 1, '/remote', true);
+    expect(appState.v2?.VisibleOrder).toEqual(['keep.jpg']);
+    expect(Object.keys(appState.v2?.Photos ?? {})).toEqual(['keep.jpg']);
+  });
+
+  it('reconciles only paths confirmed by a partially successful move', () => {
+    appState.v2 = {
+      ...appState.v2!,
+      Root: '/source',
+      VisibleOrder: ['moved.jpg', 'failed.jpg', 'keep.jpg'],
+      Photos: {
+        'moved.jpg': { ID: 'moved.jpg', IsStarred: false, Rotation: 0, Label: 1, IsTrashed: false },
+        'failed.jpg': { ID: 'failed.jpg', IsStarred: false, Rotation: 0, Label: 1, IsTrashed: false },
+        'keep.jpg': { ID: 'keep.jpg', IsStarred: false, Rotation: 0, Label: 0, IsTrashed: false },
+      },
+    } as any;
+
+    (appState as any).onExportComplete({ root: '/source', movedPaths: ['moved.jpg'] });
+
+    expect(appState.v2?.VisibleOrder).toEqual(['failed.jpg', 'keep.jpg']);
+  });
+
+  it('reconciles confirmed paths when a move is cancelled after partial success', () => {
+    appState.v2 = {
+      ...appState.v2!,
+      Root: '/source',
+      VisibleOrder: ['moved.jpg', 'pending.jpg'],
+      Photos: {
+        'moved.jpg': { ID: 'moved.jpg', IsStarred: false, Rotation: 0, Label: 1, IsTrashed: false },
+        'pending.jpg': { ID: 'pending.jpg', IsStarred: false, Rotation: 0, Label: 1, IsTrashed: false },
+      },
+    } as any;
+
+    (appState as any).onExportCancelled({ root: '/source', movedPaths: ['moved.jpg'] });
+
+    expect(appState.v2?.VisibleOrder).toEqual(['pending.jpg']);
+  });
+
+  it('ignores a late export event from a previously open folder', () => {
+    appState.v2 = {
+      ...appState.v2!,
+      Root: '/new-folder',
+      VisibleOrder: ['same-name.jpg'],
+      Photos: {
+        'same-name.jpg': { ID: 'same-name.jpg', IsStarred: false, Rotation: 0, Label: 0, IsTrashed: false },
+      },
+    } as any;
+
+    (appState as any).onExportComplete({ root: '/old-folder', movedPaths: ['same-name.jpg'] });
+
+    expect(appState.v2?.VisibleOrder).toEqual(['same-name.jpg']);
+  });
+
+  it('accepts a confirmed move event after authoritative refresh already removed the paths', () => {
+    appState.v2 = {
+      ...appState.v2!,
+      Root: '/source',
+      VisibleOrder: ['keep.jpg'],
+      Photos: {
+        'keep.jpg': { ID: 'keep.jpg', IsStarred: false, Rotation: 0, Label: 0, IsTrashed: false },
+      },
+    } as any;
+
+    (appState as any).onExportComplete({ root: '/source', movedPaths: ['already-gone.jpg'] });
+
+    expect(appState.v2?.VisibleOrder).toEqual(['keep.jpg']);
+    expect(Object.keys(appState.v2?.Photos ?? {})).toEqual(['keep.jpg']);
+  });
+
+  it('produces an empty coherent grid when every photo is confirmed moved', () => {
+    appState.v2 = {
+      ...appState.v2!,
+      Root: '/source',
+      VisibleOrder: ['a.jpg', 'b.jpg'],
+    } as any;
+    appState.filteredIndices = [0, 1];
+    appState.selectedIndices = [0, 1];
+
+    (appState as any).onExportComplete({ root: '/source', movedPaths: ['a.jpg', 'b.jpg'] });
+
+    expect(appState.v2?.VisibleOrder).toEqual([]);
+    expect(appState.v2?.Photos).toEqual({});
+    expect(appState.filteredIndices).toEqual([]);
+    expect(appState.selectedIndices).toEqual([]);
+  });
+
+  it('clears the current photo when its move is confirmed', () => {
+    appState.v2 = {
+      ...appState.v2!,
+      Root: '/source',
+      VisibleOrder: ['a.jpg', 'b.jpg'],
+    } as any;
+    appState.currentIndex = 0;
+    appState.currentFile = { ...appState.currentFile!, filename: 'a.jpg', index: 0 } as any;
+
+    (appState as any).onExportComplete({ root: '/source', movedPaths: ['a.jpg'] });
+
+    expect(appState.currentFile).toBeNull();
+    expect(appState.currentIndex).toBe(0);
+    expect(appState.v2?.VisibleOrder).toEqual(['b.jpg']);
+  });
+
+  it('does not reconcile photos when the backend reports an export error', () => {
+    appState.v2 = { ...appState.v2!, Root: '/source' } as any;
+
+    appState.onExportError({ error: 'destination unavailable' });
+
+    expect(appState.v2?.VisibleOrder).toEqual(['a.jpg', 'b.jpg']);
+    expect(Object.keys(appState.v2?.Photos ?? {}).sort()).toEqual(['a.jpg', 'b.jpg']);
+  });
+
+  it('keeps photos visible after a copy export', async () => {
+    (api.browseDialog as any).mockResolvedValue({ path: '/remote' });
+    (api.exportFiles as any).mockResolvedValue(undefined);
+    appState.selectedIndices = [0];
+
+    await appState.exportSelected(false);
+
+    expect(appState.v2?.VisibleOrder).toEqual(['a.jpg', 'b.jpg']);
+    expect(Object.keys(appState.v2?.Photos ?? {}).sort()).toEqual(['a.jpg', 'b.jpg']);
+  });
+
+  it('keeps photos visible when a move export fails', async () => {
+    (api.browseDialog as any).mockResolvedValue({ path: '/remote' });
+    (api.exportFiles as any).mockRejectedValue(new Error('move failed'));
+    appState.selectedIndices = [0];
+
+    await appState.exportSelected(true);
+
+    expect(appState.v2?.VisibleOrder).toEqual(['a.jpg', 'b.jpg']);
+    expect(Object.keys(appState.v2?.Photos ?? {}).sort()).toEqual(['a.jpg', 'b.jpg']);
   });
 
   it('disables EXIF apply for non-writable format even when capability is true', () => {

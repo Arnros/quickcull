@@ -268,16 +268,16 @@ class AppState {
       if (data) this.onExportProgress(data as Parameters<typeof this.onExportProgress>[0]);
     });
 
-    api.onEvent(EVENTS.EXPORT_COMPLETE, () => {
-      this.onExportComplete();
+    api.onEvent(EVENTS.EXPORT_COMPLETE, (data: unknown) => {
+      this.onExportComplete(data as Parameters<typeof this.onExportComplete>[0]);
     });
 
     api.onEvent(EVENTS.EXPORT_ERROR, (data: unknown) => {
       if (data) this.onExportError(data as Parameters<typeof this.onExportError>[0]);
     });
 
-    api.onEvent(EVENTS.EXPORT_CANCELLED, () => {
-      this.onExportCancelled();
+    api.onEvent(EVENTS.EXPORT_CANCELLED, (data: unknown) => {
+      this.onExportCancelled(data as Parameters<typeof this.onExportCancelled>[0]);
     });
 
     // Delegated to SyncService
@@ -502,6 +502,22 @@ class AppState {
     }, `Action failed: ${label}`);
   }
 
+  private applyLabelSnapshot(paths: string[], label: number): void {
+    if (!this.v2 || paths.length === 0) return;
+
+    const changedPaths = new Set(paths);
+    const photos = { ...this.v2.Photos };
+    for (const path of changedPaths) {
+      const photo = photos[path];
+      if (photo) photos[path] = { ...photo, Label: label };
+    }
+    this.v2 = { ...this.v2, Photos: photos };
+
+    if (this.currentFile && changedPaths.has(this.currentFile.filename)) {
+      this.currentFile = { ...this.currentFile, label } as review.FileResponse;
+    }
+  }
+
   async toggleStar(): Promise<void> {
     const target = this.activeTarget;
     if (!target) return;
@@ -545,13 +561,18 @@ class AppState {
           }
         }
         const finalLabel = allHaveLabel ? 0 : label;
-        await api.setLabel(undefined, undefined, paths, finalLabel);
+        const res = await api.setLabel(undefined, undefined, paths, finalLabel);
+        this.applyLabelSnapshot(paths, finalLabel);
+        return res;
       },
       async (t) => {
         const currentLabel = this.v2?.Photos[t.path]?.Label ?? 0;
         const finalLabel = (currentLabel === label) ? 0 : label;
         const res = await api.setLabel(t.index, t.path, undefined, finalLabel);
-        if (res) await handleTournamentProgress(this, t.index, finalLabel > 0);
+        if (res) {
+          this.applyLabelSnapshot([t.path], finalLabel);
+          await handleTournamentProgress(this, t.index, finalLabel > 0);
+        }
         return res;
       }
     );
@@ -702,6 +723,42 @@ class AppState {
     await exportService.exportSelection(this, criteria, label, move);
   }
 
+  reconcileMovedPhotos(paths: string[]): void {
+    if (!this.v2 || paths.length === 0) return;
+
+    const removed = new Set(paths);
+    const oldOrder = this.v2.VisibleOrder;
+    const currentPath = this.currentFile?.filename;
+    const filteredPaths = this.filteredIndices
+      .map((index) => oldOrder[index])
+      .filter((path): path is string => Boolean(path) && !removed.has(path));
+    const visibleOrder = oldOrder.filter((path) => !removed.has(path));
+    const photos = Object.fromEntries(
+      visibleOrder.flatMap((path) => {
+        const photo = this.v2?.Photos[path];
+        return photo ? [[path, photo] as const] : [];
+      }),
+    );
+
+    this.v2 = { ...this.v2, VisibleOrder: visibleOrder, Photos: photos };
+    this.filteredIndices = filteredPaths
+      .map((path) => visibleOrder.indexOf(path))
+      .filter((index) => index >= 0);
+    if (currentPath && removed.has(currentPath)) {
+      this.currentFile = null;
+      this.currentIndex = Math.min(this.currentIndex, Math.max(visibleOrder.length - 1, 0));
+    } else if (currentPath) {
+      const currentIndex = visibleOrder.indexOf(currentPath);
+      if (currentIndex >= 0) {
+        this.currentIndex = currentIndex;
+        if (this.currentFile) {
+          this.currentFile = { ...this.currentFile, index: currentIndex } as review.FileResponse;
+        }
+      }
+    }
+    this.validateSelection();
+  }
+
   async exportSelected(move: boolean = false): Promise<void> {
     await exportService.exportSelected(this, move);
   }
@@ -817,7 +874,11 @@ class AppState {
     this.exportStatus.error = null;
   }
 
-  onExportComplete(): void {
+  onExportComplete(data?: { root?: string; movedPaths?: string[] }): void {
+    const movedPaths = data?.movedPaths;
+    if (data?.root === this.v2?.Root && movedPaths?.length) {
+      this.reconcileMovedPhotos(movedPaths);
+    }
     this.exportStatus.active = false;
     toastService.success(i18n.t('export_started')); // The notification text might need updating to "Export finished"
   }
@@ -828,7 +889,11 @@ class AppState {
     toastService.error(i18n.t('export_failed') + ': ' + data.error);
   }
 
-  onExportCancelled(): void {
+  onExportCancelled(data?: { root?: string; movedPaths?: string[] }): void {
+    const movedPaths = data?.movedPaths;
+    if (data?.root === this.v2?.Root && movedPaths?.length) {
+      this.reconcileMovedPhotos(movedPaths);
+    }
     this.exportStatus.active = false;
     toastService.info(i18n.t('cancel'));
   }

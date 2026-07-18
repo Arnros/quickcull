@@ -3,7 +3,7 @@ package domain
 // Core application constants
 const (
 	AppName    = "quickcull"
-	AppVersion = "1.0.1"
+	AppVersion = "1.0.2"
 	MaxLabel   = 5 // Labels are 1–5 inclusive; 0 means unlabelled
 )
 
