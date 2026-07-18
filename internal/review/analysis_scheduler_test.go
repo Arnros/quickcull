@@ -53,6 +53,27 @@ func TestAnalysisScheduler_DynamicHashDeferForLargeFolder(t *testing.T) {
 	}
 }
 
+func TestNextAnalysisTask_YieldsBulkItemWhenUrgentWorkIsWaiting(t *testing.T) {
+	srv := NewServer()
+	srv.progressMu.Lock()
+	srv.progressCur = 0
+	srv.progressTotal = 100
+	srv.progressMu.Unlock()
+	// Active slot 17 prefers bulk work. Index 10 triggers the periodic urgent check.
+	srv.scheduleSlot.Store(17)
+	srv.analysisQueue.Push(10, 0)
+	srv.analysisQueue.Push(1, priorityInteractiveMin)
+
+	_, _, status := srv.nextAnalysisTask()
+	if status != analysisTaskRetry {
+		t.Fatalf("task status = %v, want retry", status)
+	}
+	interactive, _, bulk := srv.analysisQueue.DepthByTier()
+	if interactive != 1 || bulk != 1 {
+		t.Fatalf("queue depth after yield = interactive:%d bulk:%d, want 1 and 1", interactive, bulk)
+	}
+}
+
 // TestAnalysisScheduler_CancelThenWaitReturnsPromptly locks in the P0-2 fix:
 // when an analysis goroutine is started, then blocked on an empty queue, the
 // Cancel() → Wait() sequence (used by ResetAppCache) must return within a

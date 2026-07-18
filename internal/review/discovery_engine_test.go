@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 )
@@ -116,5 +117,56 @@ func TestDiscoveryEngine_PropagatesReadDirError(t *testing.T) {
 	}
 	if !gotErrEvent {
 		t.Fatal("expected discovery error event")
+	}
+}
+
+func TestDiscoveryEngine_CancellationStopsWorkersAndClosesEvents(t *testing.T) {
+	root := t.TempDir()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	engine := NewDiscoveryEngine(root, DiscoveryEngineOptions{
+		WorkerCount:    4,
+		DirQueueSize:   4,
+		EventQueueSize: 4,
+		ReadDir: func(path string) ([]os.DirEntry, error) {
+			once.Do(func() { close(started) })
+			<-release
+			return os.ReadDir(path)
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan DiscoveryEvent, engine.EventQueueSize())
+	done := make(chan error, 1)
+	before := runtime.NumGoroutine()
+	go func() { done <- engine.Run(ctx, events) }()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("discovery did not start")
+	}
+	cancel()
+	close(release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("cancelled discovery returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled discovery did not stop")
+	}
+	if _, open := <-events; open {
+		t.Fatal("event channel remained open after discovery stopped")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for runtime.NumGoroutine() > before+4 && time.Now().Before(deadline) {
+		runtime.Gosched()
+	}
+	if after := runtime.NumGoroutine(); after > before+4 {
+		t.Fatalf("worker goroutines remained after cancellation: before=%d after=%d", before, after)
 	}
 }

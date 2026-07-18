@@ -193,6 +193,81 @@ func TestAsyncMetadataWriter_CloseWithoutPendingIsFast(t *testing.T) {
 	}
 }
 
+func TestAsyncMetadataWriter_RequeueFailedSingleDoesNotOverrideNewerFullFolder(t *testing.T) {
+	w := &asyncMetadataWriter{
+		pendingSingle: map[string]map[string]persistence.PhotoMetadata{},
+		pendingFull: map[string]map[string]persistence.PhotoMetadata{
+			"folder": {
+				"photo.jpg": {Label: 5},
+			},
+		},
+		pendingHistory: map[string][]byte{},
+	}
+
+	w.requeueFailedWrites(
+		map[string]map[string]persistence.PhotoMetadata{
+			"folder": {
+				"photo.jpg": {Label: 1},
+			},
+		},
+		nil,
+		nil,
+	)
+
+	if _, exists := w.pendingSingle["folder"]; exists {
+		t.Fatal("stale failed single write was requeued behind a newer full-folder snapshot")
+	}
+	if got := w.pendingFull["folder"]["photo.jpg"].Label; got != 5 {
+		t.Fatalf("newer full-folder metadata label = %d, want 5", got)
+	}
+}
+
+func TestAsyncMetadataWriter_RequeuePreservesNewerPendingWrites(t *testing.T) {
+	w := &asyncMetadataWriter{
+		pendingSingle: map[string]map[string]persistence.PhotoMetadata{
+			"single": {"photo.jpg": {Label: 4}},
+		},
+		pendingFull: map[string]map[string]persistence.PhotoMetadata{
+			"full": {"photo.jpg": {Label: 5}},
+		},
+		pendingHistory: map[string][]byte{"history": []byte("new")},
+	}
+
+	w.requeueFailedWrites(
+		map[string]map[string]persistence.PhotoMetadata{
+			"single": {"photo.jpg": {Label: 1}},
+			"fresh":  {"photo.jpg": {Label: 2}},
+		},
+		map[string]map[string]persistence.PhotoMetadata{
+			"full":       {"photo.jpg": {Label: 1}},
+			"fresh-full": {"photo.jpg": {Label: 3}},
+		},
+		map[string][]byte{
+			"history": []byte("old"),
+			"fresh":   []byte("first"),
+		},
+	)
+
+	if got := w.pendingSingle["single"]["photo.jpg"].Label; got != 4 {
+		t.Fatalf("newer single label = %d, want 4", got)
+	}
+	if got := w.pendingSingle["fresh"]["photo.jpg"].Label; got != 2 {
+		t.Fatalf("requeued single label = %d, want 2", got)
+	}
+	if got := w.pendingFull["full"]["photo.jpg"].Label; got != 5 {
+		t.Fatalf("newer full label = %d, want 5", got)
+	}
+	if got := w.pendingFull["fresh-full"]["photo.jpg"].Label; got != 3 {
+		t.Fatalf("requeued full label = %d, want 3", got)
+	}
+	if got := string(w.pendingHistory["history"]); got != "new" {
+		t.Fatalf("newer history = %q, want new", got)
+	}
+	if got := string(w.pendingHistory["fresh"]); got != "first" {
+		t.Fatalf("requeued history = %q, want first", got)
+	}
+}
+
 // newNonBlockingPersistence returns a blockingPersistence variant where Save*
 // calls never block, so tests can flush deterministically without releasing.
 func newNonBlockingPersistence() *blockingPersistence {

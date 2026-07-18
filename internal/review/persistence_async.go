@@ -131,6 +131,9 @@ func (w *asyncMetadataWriter) requeueFailedWrites(failedSingle, failedFull map[s
 		}
 	}
 	for folderID, photos := range failedSingle {
+		if _, superseded := w.pendingFull[folderID]; superseded {
+			continue
+		}
 		if _, exists := w.pendingSingle[folderID]; !exists {
 			w.pendingSingle[folderID] = make(map[string]persistence.PhotoMetadata)
 		}

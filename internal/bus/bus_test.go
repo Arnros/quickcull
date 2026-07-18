@@ -218,6 +218,27 @@ func TestEventUnmarshalNestedBatchRejected(t *testing.T) {
 	}
 }
 
+func TestEventUnmarshalRejectsMalformedKnownPayloads(t *testing.T) {
+	types := []EventType{
+		TypeCommandToggleStar,
+		TypeCommandTrashPhoto,
+		TypeCommandLabelPhoto,
+		TypeCommandRotatePhoto,
+		TypeCommandUndo,
+		TypeCommandResetMetadata,
+		TypeCommandBatch,
+	}
+	for _, eventType := range types {
+		t.Run(string(eventType), func(t *testing.T) {
+			raw := []byte(`{"Type":"` + string(eventType) + `","Payload":"invalid"}`)
+			var event Event
+			if err := json.Unmarshal(raw, &event); err == nil {
+				t.Fatalf("expected malformed %s payload to fail", eventType)
+			}
+		})
+	}
+}
+
 // TestBusDropsStateEventWhenChannelFull verifies that State events are dropped
 // (and tracked) when the small State subscriber channel saturates, keeping the
 // analyzer loop non-blocking. Command events use a much larger buffer and are

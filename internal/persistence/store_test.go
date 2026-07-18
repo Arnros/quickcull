@@ -1,9 +1,33 @@
 package persistence
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+func TestNewMetadataStoreCreatesPrivateDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not enforced on Windows")
+	}
+	privateDir := filepath.Join(t.TempDir(), "private", "metadata")
+	store, err := NewMetadataStore(filepath.Join(privateDir, "state.db"))
+	if err != nil {
+		t.Fatalf("create metadata store: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close metadata store: %v", err)
+	}
+
+	info, err := os.Stat(privateDir)
+	if err != nil {
+		t.Fatalf("stat metadata directory: %v", err)
+	}
+	if got := info.Mode().Perm(); got&0o077 != 0 {
+		t.Fatalf("metadata directory permissions = %04o, group/other access must be zero", got)
+	}
+}
 
 func TestMetadataStore(t *testing.T) {
 	tmpDir := t.TempDir()

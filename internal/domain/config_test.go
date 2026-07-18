@@ -167,3 +167,55 @@ func TestExiftoolPath(t *testing.T) {
 		t.Errorf("ExiftoolPath() empty-config fallback = %q, expected %q", got, fallbackExe)
 	}
 }
+
+func TestApplyNewConfigDefaults(t *testing.T) {
+	var cfg Config
+	applyNewConfigDefaults(&cfg)
+
+	if cfg.WindowWidth != defaultWindowWidth || cfg.WindowHeight != defaultWindowHeight {
+		t.Fatalf("window defaults = %dx%d, want %dx%d", cfg.WindowWidth, cfg.WindowHeight, defaultWindowWidth, defaultWindowHeight)
+	}
+	if cfg.DuplicateThreshold != defaultDuplicateThreshold || cfg.AutoRefreshSeconds != defaultAutoRefreshSeconds {
+		t.Fatalf("review defaults = threshold %.1f refresh %d", cfg.DuplicateThreshold, cfg.AutoRefreshSeconds)
+	}
+	if cfg.BurstSeconds != defaultBurstSeconds || cfg.BurstMaxFiles != defaultBurstMaxFiles {
+		t.Fatalf("burst defaults = %d/%d, want %d/%d", cfg.BurstSeconds, cfg.BurstMaxFiles, defaultBurstSeconds, defaultBurstMaxFiles)
+	}
+	if !cfg.StartupSnapshotEnabled {
+		t.Fatal("startup snapshot must default to enabled")
+	}
+}
+
+func TestNormalizeLoadedConfigDefaultsMissingFieldsAndPreservesExplicitValues(t *testing.T) {
+	cfg := Config{WindowX: 24, WindowY: 42, StartupSnapshotEnabled: false}
+	raw := map[string]json.RawMessage{
+		"windowX":                json.RawMessage(`24`),
+		"windowY":                json.RawMessage(`42`),
+		"startupSnapshotEnabled": json.RawMessage(`false`),
+	}
+	normalizeLoadedConfig(&cfg, raw)
+
+	if cfg.WindowX != 24 || cfg.WindowY != 42 {
+		t.Fatalf("explicit position changed to (%d,%d)", cfg.WindowX, cfg.WindowY)
+	}
+	if cfg.StartupSnapshotEnabled {
+		t.Fatal("explicit disabled startup snapshot was replaced by default")
+	}
+	if cfg.Shortcuts == nil {
+		t.Fatal("nil shortcuts map was not initialized")
+	}
+	if cfg.WindowWidth != defaultWindowWidth || cfg.WindowHeight != defaultWindowHeight || cfg.DuplicateThreshold != defaultDuplicateThreshold {
+		t.Fatalf("invalid loaded values were not normalized: %+v", cfg)
+	}
+}
+
+func TestNormalizeLoadedConfigUsesOSPositionWhenCoordinatesAreMissing(t *testing.T) {
+	var cfg Config
+	normalizeLoadedConfig(&cfg, map[string]json.RawMessage{})
+	if cfg.WindowX != -1 || cfg.WindowY != -1 {
+		t.Fatalf("missing position normalized to (%d,%d), want (-1,-1)", cfg.WindowX, cfg.WindowY)
+	}
+	if !cfg.StartupSnapshotEnabled {
+		t.Fatal("missing startup snapshot setting must default to enabled")
+	}
+}

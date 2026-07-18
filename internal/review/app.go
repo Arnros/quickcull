@@ -729,7 +729,7 @@ func undoResponseTarget(event bus.Event) (actionType, photoID string, index int)
 	photoID = photoIDFromPayload(event.Payload)
 	switch payload := event.Payload.(type) {
 	case bus.CommandTrashPhotoPayload:
-		return "trash", payload.PhotoID, index
+		return "trash", payload.PhotoID, payload.OriginalIndex
 	case bus.CommandToggleStarPayload:
 		return "star", payload.PhotoID, index
 	case bus.CommandLabelPhotoPayload:
