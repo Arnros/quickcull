@@ -15,12 +15,6 @@ func (e CodedError) Error() string {
 	return ErrorPrefix + e.Code
 }
 
-// NewCodedError creates a new CodedError with the given code.
-// Prefer using the pre-declared Err* variables instead of creating new ones.
-func NewCodedError(code string) error {
-	return CodedError{Code: code}
-}
-
 var (
 	ErrFolderNotFound        = CodedError{Code: "folder_not_found"}
 	ErrNoMediaFiles          = CodedError{Code: "no_media_files"}

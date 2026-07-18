@@ -38,12 +38,22 @@ describe('FilterState', () => {
     filterState.filteredIndices = [];
     filterState.duplicateGroups = [];
     filterState.activeLabelFilter = 0;
+    filterState.filters = { cameras: [], isos: [] };
   });
 
   it('initialise avec NONE', () => {
     expect(filterState.filterMode).toBe(FILTER_MODES.NONE);
     expect(filterState.filteredIndices).toEqual([]);
     expect(filterState.activeFilters).toEqual({});
+  });
+
+  it('charge les filtres disponibles depuis le backend', async () => {
+    (api.getFilters as any).mockResolvedValue({ cameras: ['Canon', 'Sony'], isos: ['100', '800'] });
+
+    await filterState.loadFilters();
+
+    expect(api.getFilters).toHaveBeenCalledOnce();
+    expect(filterState.filters).toEqual({ cameras: ['Canon', 'Sony'], isos: ['100', '800'] });
   });
 
   it('updateFilteredIndices en mode NONE retourne tableau vide', async () => {

@@ -163,22 +163,6 @@ func Reduce(currentState *AppState, event bus.Event) (*AppState, bus.Event, erro
 
 	// 3. Apply mutations based on event type.
 	switch payload := event.Payload.(type) {
-	case bus.CommandToggleStarPayload:
-		applyToggleStar(&nextState, payload.PhotoID, payload.Starred)
-	case bus.CommandTrashPhotoPayload:
-		if photo, ok := nextState.Photos[payload.PhotoID]; ok {
-			payload.OldIsTrashed = photo.IsTrashed
-			event.Payload = payload
-		}
-		applyTrashPhoto(&nextState, payload.PhotoID)
-	case bus.CommandLabelPhotoPayload:
-		applyLabelPhoto(&nextState, payload.PhotoID, payload.Label)
-	case bus.CommandRotatePhotoPayload:
-		if photo, ok := nextState.Photos[payload.PhotoID]; ok {
-			payload.OldRotation = photo.Rotation
-			event.Payload = payload
-		}
-		applyRotatePhoto(&nextState, payload.PhotoID, payload.Direction)
 	case bus.CommandResetMetadataPayload:
 		applyResetMetadata(&nextState, payload.Scope)
 	case bus.CommandBatchPayload:
@@ -191,28 +175,11 @@ func Reduce(currentState *AppState, event bus.Event) (*AppState, bus.Event, erro
 			if _, nested := subEvent.Payload.(bus.CommandBatchPayload); nested {
 				return &nextState, event, fmt.Errorf("nested CommandBatch not allowed")
 			}
-			switch p := subEvent.Payload.(type) {
-			case bus.CommandToggleStarPayload:
-				applyToggleStar(&nextState, p.PhotoID, p.Starred)
-			case bus.CommandLabelPhotoPayload:
-				applyLabelPhoto(&nextState, p.PhotoID, p.Label)
-			case bus.CommandTrashPhotoPayload:
-				if photo, ok := nextState.Photos[p.PhotoID]; ok {
-					p.OldIsTrashed = photo.IsTrashed
-					copiedEvents[i].Payload = p
-				}
-				applyTrashPhoto(&nextState, p.PhotoID)
-			case bus.CommandRotatePhotoPayload:
-				if photo, ok := nextState.Photos[p.PhotoID]; ok {
-					p.OldRotation = photo.Rotation
-					copiedEvents[i].Payload = p
-				}
-				applyRotatePhoto(&nextState, p.PhotoID, p.Direction)
-			}
+			copiedEvents[i] = applySingleEvent(&nextState, subEvent)
 		}
 		event.Payload = bus.CommandBatchPayload{Events: copiedEvents}
 	default:
-		// Unsupported event type; state remains unchanged.
+		event = applySingleEvent(&nextState, event)
 	}
 
 	// 4. Append the event to our local historical journal (useful for Undo later).
@@ -226,6 +193,30 @@ func Reduce(currentState *AppState, event bus.Event) (*AppState, bus.Event, erro
 	nextState.UndoLen = len(nextState.History)
 
 	return &nextState, event, nil
+}
+
+// applySingleEvent applies one photo metadata event and returns the event with
+// its undo fields populated. Unsupported events leave the state unchanged.
+func applySingleEvent(state *AppState, event bus.Event) bus.Event {
+	switch payload := event.Payload.(type) {
+	case bus.CommandToggleStarPayload:
+		applyToggleStar(state, payload.PhotoID, payload.Starred)
+	case bus.CommandTrashPhotoPayload:
+		if photo, ok := state.Photos[payload.PhotoID]; ok {
+			payload.OldIsTrashed = photo.IsTrashed
+			event.Payload = payload
+		}
+		applyTrashPhoto(state, payload.PhotoID)
+	case bus.CommandLabelPhotoPayload:
+		applyLabelPhoto(state, payload.PhotoID, payload.Label)
+	case bus.CommandRotatePhotoPayload:
+		if photo, ok := state.Photos[payload.PhotoID]; ok {
+			payload.OldRotation = photo.Rotation
+			event.Payload = payload
+		}
+		applyRotatePhoto(state, payload.PhotoID, payload.Direction)
+	}
+	return event
 }
 
 // applyUndo reverses the most recent event in the history of nextState.
@@ -253,259 +244,154 @@ func applyUndo(currentState *AppState, nextState AppState) (*AppState, bus.Event
 		newPhotos[k] = v
 	}
 
-	switch payload := undoneEvent.Payload.(type) {
-	case bus.CommandToggleStarPayload:
-		photo, ok := newPhotos[payload.PhotoID]
-		if !ok {
-			break
-		}
-		wasStarred := photo.IsStarred
-		newPhoto := photo
-		newPhoto.IsStarred = payload.OldStarred
-		newPhotos[payload.PhotoID] = newPhoto
-		if newPhoto.IsStarred && !wasStarred {
-			nextState.StarredCount++
-		} else if !newPhoto.IsStarred && wasStarred {
-			if nextState.StarredCount > 0 {
-				nextState.StarredCount--
-			}
-		}
-	case bus.CommandTrashPhotoPayload:
-		photo, ok := newPhotos[payload.PhotoID]
-		if !ok {
-			break
-		}
-		wasTrash := photo.IsTrashed
-		newPhoto := photo
-		newPhoto.IsTrashed = payload.OldIsTrashed
-		newPhotos[payload.PhotoID] = newPhoto
-		if newPhoto.IsTrashed && !wasTrash {
-			nextState.TrashedCount++
-		} else if !newPhoto.IsTrashed && wasTrash {
-			if nextState.TrashedCount > 0 {
-				nextState.TrashedCount--
-			}
-		}
-	case bus.CommandLabelPhotoPayload:
-		photo, ok := newPhotos[payload.PhotoID]
-		if !ok {
-			break
-		}
-		newLabel := photo.Label
-		oldLabel := payload.OldLabel
-		newPhoto := photo
-		newPhoto.Label = oldLabel
-		newPhotos[payload.PhotoID] = newPhoto
-
-		if newLabel > noLabel && oldLabel == noLabel {
-			if nextState.LabeledCount > 0 {
-				nextState.LabeledCount--
-			}
-		} else if newLabel == noLabel && oldLabel > noLabel {
-			nextState.LabeledCount++
-		}
-	case bus.CommandRotatePhotoPayload:
-		photo, ok := newPhotos[payload.PhotoID]
-		if !ok {
-			break
-		}
-		wasRotated := photo.Rotation != 0
-		newPhoto := photo
-		if payload.OldRotation != 0 || payload.Direction == rotationReset {
-			// Exact undo using stored old rotation value
-			newPhoto.Rotation = payload.OldRotation
-		} else {
-			// Legacy fallback: invert direction
-			switch payload.Direction {
-			case rotationLeft:
-				newPhoto.Rotation = (photo.Rotation + rotationStep) % rotationModulus
-			case rotationRight:
-				newPhoto.Rotation = (photo.Rotation - rotationStep) % rotationModulus
-				if newPhoto.Rotation < 0 {
-					newPhoto.Rotation += rotationModulus
-				}
-			default:
-				break
-			}
-		}
-		isRotated := newPhoto.Rotation != 0
-		newPhotos[payload.PhotoID] = newPhoto
-		if !wasRotated && isRotated {
-			nextState.RotatedCount++
-		} else if wasRotated && !isRotated {
-			if nextState.RotatedCount > 0 {
-				nextState.RotatedCount--
-			}
-		}
-	case bus.CommandBatchPayload:
-		// Undo all sub-events in reverse order using the already-created newPhotos map.
-		for i := len(payload.Events) - 1; i >= 0; i-- {
-			subEvent := payload.Events[i]
-			switch p := subEvent.Payload.(type) {
-			case bus.CommandToggleStarPayload:
-				photo, ok := newPhotos[p.PhotoID]
-				if !ok {
-					continue
-				}
-				wasStarred := photo.IsStarred
-				newPhoto := photo
-				newPhoto.IsStarred = p.OldStarred
-				newPhotos[p.PhotoID] = newPhoto
-				if newPhoto.IsStarred && !wasStarred {
-					nextState.StarredCount++
-				} else if !newPhoto.IsStarred && wasStarred {
-					if nextState.StarredCount > 0 {
-						nextState.StarredCount--
-					}
-				}
-			case bus.CommandLabelPhotoPayload:
-				photo, ok := newPhotos[p.PhotoID]
-				if !ok {
-					continue
-				}
-				newLabel := photo.Label
-				newPhoto := photo
-				newPhoto.Label = p.OldLabel
-				newPhotos[p.PhotoID] = newPhoto
-				if newLabel > noLabel && p.OldLabel == noLabel {
-					if nextState.LabeledCount > 0 {
-						nextState.LabeledCount--
-					}
-				} else if newLabel == noLabel && p.OldLabel > noLabel {
-					nextState.LabeledCount++
-				}
-			case bus.CommandTrashPhotoPayload:
-				photo, ok := newPhotos[p.PhotoID]
-				if !ok {
-					continue
-				}
-				wasTrash := photo.IsTrashed
-				newPhoto := photo
-				newPhoto.IsTrashed = p.OldIsTrashed
-				newPhotos[p.PhotoID] = newPhoto
-				if newPhoto.IsTrashed && !wasTrash {
-					nextState.TrashedCount++
-				} else if !newPhoto.IsTrashed && wasTrash {
-					if nextState.TrashedCount > 0 {
-						nextState.TrashedCount--
-					}
-				}
-			case bus.CommandRotatePhotoPayload:
-				photo, ok := newPhotos[p.PhotoID]
-				if !ok {
-					continue
-				}
-				wasRotated := photo.Rotation != 0
-				newPhoto := photo
-				if p.OldRotation != 0 || p.Direction == rotationReset {
-					newPhoto.Rotation = p.OldRotation
-				} else {
-					switch p.Direction {
-					case rotationLeft:
-						newPhoto.Rotation = (photo.Rotation + rotationStep) % rotationModulus
-					case rotationRight:
-						newPhoto.Rotation = (photo.Rotation - rotationStep) % rotationModulus
-						if newPhoto.Rotation < 0 {
-							newPhoto.Rotation += rotationModulus
-						}
-					}
-				}
-				isRotated := newPhoto.Rotation != 0
-				newPhotos[p.PhotoID] = newPhoto
-				if !wasRotated && isRotated {
-					nextState.RotatedCount++
-				} else if wasRotated && !isRotated {
-					if nextState.RotatedCount > 0 {
-						nextState.RotatedCount--
-					}
-				}
-			}
-		}
-	}
+	applyUndoEvent(&nextState, newPhotos, undoneEvent)
 
 	nextState.Photos = newPhotos
 	return &nextState, undoneEvent, nil
 }
 
+// applyUndoEvent restores the metadata captured by one event. Batch events are
+// traversed in reverse so multiple changes to the same photo unwind correctly.
+func applyUndoEvent(state *AppState, photos map[string]Photo, event bus.Event) {
+	switch payload := event.Payload.(type) {
+	case bus.CommandToggleStarPayload:
+		before, after, ok := updatePhoto(photos, payload.PhotoID, func(photo *Photo) {
+			photo.IsStarred = payload.OldStarred
+		})
+		if ok {
+			adjustUndoCount(&state.StarredCount, before.IsStarred, after.IsStarred)
+		}
+	case bus.CommandTrashPhotoPayload:
+		before, after, ok := updatePhoto(photos, payload.PhotoID, func(photo *Photo) {
+			photo.IsTrashed = payload.OldIsTrashed
+		})
+		if ok {
+			adjustUndoCount(&state.TrashedCount, before.IsTrashed, after.IsTrashed)
+		}
+	case bus.CommandLabelPhotoPayload:
+		before, after, ok := updatePhoto(photos, payload.PhotoID, func(photo *Photo) {
+			photo.Label = payload.OldLabel
+		})
+		if ok {
+			adjustUndoCount(&state.LabeledCount, before.Label > noLabel, after.Label > noLabel)
+		}
+	case bus.CommandRotatePhotoPayload:
+		before, after, ok := updatePhoto(photos, payload.PhotoID, func(photo *Photo) {
+			photo.Rotation = undoRotation(*photo, payload)
+		})
+		if ok {
+			adjustUndoCount(&state.RotatedCount, before.Rotation != 0, after.Rotation != 0)
+		}
+	case bus.CommandBatchPayload:
+		for i := len(payload.Events) - 1; i >= 0; i-- {
+			applyUndoEvent(state, photos, payload.Events[i])
+		}
+	}
+}
+
+func updatePhoto(photos map[string]Photo, photoID string, update func(*Photo)) (Photo, Photo, bool) {
+	before, ok := photos[photoID]
+	if !ok {
+		return Photo{}, Photo{}, false
+	}
+	after := before
+	update(&after)
+	photos[photoID] = after
+	return before, after, true
+}
+
+func adjustUndoCount(count *int, before, after bool) {
+	switch {
+	case !before && after:
+		*count++
+	case before && !after && *count > 0:
+		*count--
+	}
+}
+
+func undoRotation(photo Photo, payload bus.CommandRotatePhotoPayload) int {
+	if payload.OldRotation != 0 || payload.Direction == rotationReset {
+		return payload.OldRotation
+	}
+
+	switch payload.Direction {
+	case rotationLeft:
+		return (photo.Rotation + rotationStep) % rotationModulus
+	case rotationRight:
+		rotation := (photo.Rotation - rotationStep) % rotationModulus
+		if rotation < 0 {
+			rotation += rotationModulus
+		}
+		return rotation
+	default:
+		return photo.Rotation
+	}
+}
+
 // applyToggleStar sets the starred state of a photo and keeps StarredCount in sync.
 func applyToggleStar(s *AppState, photoID string, starred bool) {
-	photo, ok := s.Photos[photoID]
+	before, after, ok := updatePhoto(s.Photos, photoID, func(photo *Photo) {
+		photo.IsStarred = starred
+	})
 	if !ok {
 		return
 	}
-	wasStarred := photo.IsStarred
-	photo.IsStarred = starred
-	s.Photos[photoID] = photo
-	if photo.IsStarred && !wasStarred {
-		s.StarredCount++
-	} else if !photo.IsStarred && wasStarred {
-		s.StarredCount--
-	}
-	slog.Debug("Reducer: Applied ToggleStar", "photo", photoID, "starred", photo.IsStarred)
+	adjustCount(&s.StarredCount, before.IsStarred, after.IsStarred)
+	slog.Debug("Reducer: Applied ToggleStar", "photo", photoID, "starred", after.IsStarred)
 }
 
 // applyTrashPhoto flips the trashed state of a single photo and keeps TrashedCount in sync.
 func applyTrashPhoto(s *AppState, photoID string) {
-	photo, ok := s.Photos[photoID]
+	before, after, ok := updatePhoto(s.Photos, photoID, func(photo *Photo) {
+		photo.IsTrashed = !photo.IsTrashed
+	})
 	if !ok {
 		return
 	}
-	photo.IsTrashed = !photo.IsTrashed
-	s.Photos[photoID] = photo
-	if photo.IsTrashed {
-		s.TrashedCount++
-	} else {
-		s.TrashedCount--
-	}
-	slog.Debug("Reducer: Applied TrashPhoto", "photo", photoID, "trashed", photo.IsTrashed)
+	adjustCount(&s.TrashedCount, before.IsTrashed, after.IsTrashed)
+	slog.Debug("Reducer: Applied TrashPhoto", "photo", photoID, "trashed", after.IsTrashed)
 }
 
 // applyLabelPhoto sets a new label on a photo and keeps LabeledCount in sync.
 func applyLabelPhoto(s *AppState, photoID string, label int) {
-	photo, ok := s.Photos[photoID]
+	before, after, ok := updatePhoto(s.Photos, photoID, func(photo *Photo) {
+		photo.Label = label
+	})
 	if !ok {
 		return
 	}
-	oldLabel := photo.Label
-	photo.Label = label
-	s.Photos[photoID] = photo
-	if oldLabel == noLabel && label > noLabel {
-		s.LabeledCount++
-	} else if oldLabel > noLabel && label == noLabel {
-		s.LabeledCount--
-	}
+	adjustCount(&s.LabeledCount, before.Label > noLabel, after.Label > noLabel)
 	slog.Debug("Reducer: Applied LabelPhoto", "photo", photoID, "label", label)
 }
 
 // applyRotatePhoto adjusts a photo's rotation by rotationStep degrees in the given direction.
 func applyRotatePhoto(s *AppState, photoID, direction string) {
-	photo, ok := s.Photos[photoID]
+	before, after, ok := updatePhoto(s.Photos, photoID, func(photo *Photo) {
+		switch direction {
+		case rotationLeft:
+			photo.Rotation = (photo.Rotation - rotationStep) % rotationModulus
+			if photo.Rotation < 0 {
+				photo.Rotation += rotationModulus
+			}
+		case rotationRight:
+			photo.Rotation = (photo.Rotation + rotationStep) % rotationModulus
+		case rotationReset:
+			photo.Rotation = 0
+		}
+	})
 	if !ok {
 		return
 	}
-	wasRotated := photo.Rotation != 0
-	switch direction {
-	case rotationLeft:
-		photo.Rotation = (photo.Rotation - rotationStep) % rotationModulus
-		if photo.Rotation < 0 {
-			photo.Rotation += rotationModulus
-		}
-	case rotationRight:
-		photo.Rotation = (photo.Rotation + rotationStep) % rotationModulus
-	case rotationReset:
-		photo.Rotation = 0
-	}
-	isRotated := photo.Rotation != 0
-	s.Photos[photoID] = photo
+	adjustUndoCount(&s.RotatedCount, before.Rotation != 0, after.Rotation != 0)
+	slog.Debug("Reducer: Applied RotatePhoto", "photo", photoID, "rotation", after.Rotation)
+}
 
-	if !wasRotated && isRotated {
-		s.RotatedCount++
-	} else if wasRotated && !isRotated {
-		if s.RotatedCount > 0 {
-			s.RotatedCount--
-		}
+func adjustCount(count *int, before, after bool) {
+	if !before && after {
+		*count++
+	} else if before && !after {
+		*count--
 	}
-	slog.Debug("Reducer: Applied RotatePhoto", "photo", photoID, "rotation", photo.Rotation)
 }
 
 // applyResetMetadata clears star and/or label metadata across all photos based on scope.

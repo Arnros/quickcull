@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { appState } from './lib/appState.svelte';
+  import { viewState } from './lib/viewState.svelte';
   import { shortcutService } from './lib/shortcutService.svelte';
   import { toastService } from './lib/toast.svelte';
   import { EventsOn } from '../wailsjs/runtime/runtime';
@@ -17,7 +18,7 @@
     window.addEventListener('keydown', handleKeydown);
 
     const saveOnUnload = () => {
-      if (appState.view === 'review') {
+      if (viewState.current === 'review') {
         appState.persistPositionNow();
       }
     };
@@ -29,8 +30,8 @@
   });
 </script>
 
-<main class={appState.config?.theme === 'light' ? 'theme-light' : ''}>
-  {#if appState.view === 'picker'}
+<main class={viewState.config?.theme === 'light' ? 'theme-light' : ''}>
+  {#if viewState.current === 'picker'}
     <Picker />
   {:else}
     <Review />

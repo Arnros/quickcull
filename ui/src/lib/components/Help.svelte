@@ -1,5 +1,7 @@
 <script lang="ts">
   import { appState } from "../appState.svelte";
+  import { filterState } from "../filterState.svelte";
+  import { viewState } from "../viewState.svelte";
   import { i18n } from "../i18n.svelte";
   import { shortcutService } from "../shortcutService.svelte";
   import { resolveContextShortcutHints } from "../shortcutContext";
@@ -47,14 +49,14 @@
   });
 
   const contextHints = $derived(resolveContextShortcutHints({
-    view: appState.view,
-    filterBarOpen: appState.filterBarOpen,
+    view: viewState.current,
+    filterBarOpen: filterState.filterBarOpen,
   }));
 </script>
 
 <Modal
-  isOpen={appState.helpOpen}
-  onClose={() => (appState.helpOpen = false)}
+  isOpen={viewState.helpOpen}
+  onClose={() => (viewState.helpOpen = false)}
   width="min(900px, 95vw)"
   padding="40px"
   ariaLabel="help-title"

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { appState } from "../appState.svelte";
+  import { viewState } from "../viewState.svelte";
   import { api } from "../api";
   import { i18n } from "../i18n.svelte";
   import Settings from "./Settings.svelte";
@@ -43,18 +44,18 @@
       onclick={() => appState.toggleTheme()}
       title={i18n.t('toggle_theme')}
     >
-      {appState.config?.theme === "light" ? "🌙" : "☀"}
+      {viewState.config?.theme === "light" ? "🌙" : "☀"}
     </button>
     <button
       class="icon-btn"
-      onclick={() => (appState.helpOpen = true)}
+      onclick={() => (viewState.helpOpen = true)}
       title={i18n.t("help")}
     >
       ?
     </button>
     <button
       class="icon-btn"
-      onclick={() => (appState.settingsOpen = true)}
+      onclick={() => (viewState.settingsOpen = true)}
       title={i18n.t("settings")}
     >
       ⚙
@@ -149,11 +150,11 @@
     </div>
   {/if}
 
-  {#if appState.settingsOpen}
+  {#if viewState.settingsOpen}
     <Settings />
   {/if}
 
-  {#if appState.helpOpen}
+  {#if viewState.helpOpen}
     <Help />
   {/if}
 </div>

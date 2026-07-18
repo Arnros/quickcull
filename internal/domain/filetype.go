@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"bytes"
 	"os"
 	"strings"
 )
@@ -119,56 +120,48 @@ func (ft FileType) Extension() string {
 // 12 bytes covers RIFF/WEBP (needs bytes 8–11) and ISO base media (ftyp brand at 8–11).
 const magicHeaderSize = 12
 
+type magicDetector struct {
+	fileType FileType
+	matches  func([]byte) bool
+}
+
+var magicDetectors = []magicDetector{
+	{FileTypeJPEG, func(h []byte) bool { return bytes.Equal(h[:3], []byte{0xFF, 0xD8, 0xFF}) }},
+	{FileTypePNG, func(h []byte) bool { return bytes.Equal(h[:8], []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}) }},
+	{FileTypeGIF, func(h []byte) bool {
+		return bytes.Equal(h[:6], []byte("GIF87a")) || bytes.Equal(h[:6], []byte("GIF89a"))
+	}},
+	{FileTypeBMP, func(h []byte) bool { return bytes.Equal(h[:2], []byte("BM")) }},
+	{FileTypeTIFF, func(h []byte) bool {
+		return bytes.Equal(h[:4], []byte{0x49, 0x49, 0x2A, 0x00}) || bytes.Equal(h[:4], []byte{0x4D, 0x4D, 0x00, 0x2A})
+	}},
+	{FileTypeWebP, func(h []byte) bool { return bytes.Equal(h[:4], []byte("RIFF")) && bytes.Equal(h[8:12], []byte("WEBP")) }},
+	{FileTypeHEIC, isHEICHeader},
+}
+
 // DetectFromMagicBytes detects the file type using its magic bytes header
 func DetectFromMagicBytes(header []byte) FileType {
 	if len(header) < magicHeaderSize {
 		return FileTypeUnknown
 	}
-
-	// JPEG: FFD8 FF
-	if header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF {
-		return FileTypeJPEG
-	}
-
-	// PNG: 89 50 4E 47 0D 0A 1A 0A
-	if header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47 &&
-		header[4] == 0x0D && header[5] == 0x0A && header[6] == 0x1A && header[7] == 0x0A {
-		return FileTypePNG
-	}
-
-	// GIF: GIF87a or GIF89a
-	if header[0] == 'G' && header[1] == 'I' && header[2] == 'F' && header[3] == '8' &&
-		(header[4] == '7' || header[4] == '9') && header[5] == 'a' {
-		return FileTypeGIF
-	}
-
-	// BMP: BM
-	if header[0] == 'B' && header[1] == 'M' {
-		return FileTypeBMP
-	}
-
-	// TIFF: II (little-endian) or MM (big-endian)
-	if (header[0] == 0x49 && header[1] == 0x49 && header[2] == 0x2A && header[3] == 0x00) ||
-		(header[0] == 0x4D && header[1] == 0x4D && header[2] == 0x00 && header[3] == 0x2A) {
-		return FileTypeTIFF
-	}
-
-	// WebP: RIFF....WEBP
-	if header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F' &&
-		header[8] == 'W' && header[9] == 'E' && header[10] == 'B' && header[11] == 'P' {
-		return FileTypeWebP
-	}
-
-	// HEIC/HEIF: ftyp box
-	if string(header[4:8]) == "ftyp" {
-		brand := string(header[8:12])
-		switch brand {
-		case "heic", "heix", "mif1", "heif":
-			return FileTypeHEIC
+	for _, detector := range magicDetectors {
+		if detector.matches(header) {
+			return detector.fileType
 		}
 	}
-
 	return FileTypeUnknown
+}
+
+func isHEICHeader(header []byte) bool {
+	if !bytes.Equal(header[4:8], []byte("ftyp")) {
+		return false
+	}
+	switch string(header[8:12]) {
+	case "heic", "heix", "mif1", "heif":
+		return true
+	default:
+		return false
+	}
 }
 
 // DetectFromPath detects the file type by reading its header from disk
@@ -213,20 +206,6 @@ func FromExtension(ext string) FileType {
 	}
 }
 
-// MediaFile encapsulates a file path and its detected type
-type MediaFile struct {
-	Path string
-	Type FileType
-}
-
-// NewMediaFile creates a new MediaFile and detects its type
-func NewMediaFile(path string) MediaFile {
-	return MediaFile{
-		Path: path,
-		Type: DetectFromPath(path),
-	}
-}
-
 // PhotoExtensions contains all supported photo extensions
 var PhotoExtensions = map[string]bool{
 	".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
@@ -246,4 +225,3 @@ func IsPhotoExtension(ext string) bool {
 func IsSupportedExtension(ext string) bool {
 	return IsPhotoExtension(ext)
 }
-

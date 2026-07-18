@@ -94,14 +94,11 @@ func (s *Server) persistStateChanges(ev bus.Event, state *AppState) {
 	writer := s.asyncPersistenceWriter()
 
 	switch payload := ev.Payload.(type) {
-	case bus.CommandToggleStarPayload:
-		s.persistSinglePhoto(folderID, payload.PhotoID, state, writer)
-	case bus.CommandLabelPhotoPayload:
-		s.persistSinglePhoto(folderID, payload.PhotoID, state, writer)
-	case bus.CommandTrashPhotoPayload:
-		s.persistSinglePhoto(folderID, payload.PhotoID, state, writer)
-	case bus.CommandRotatePhotoPayload:
-		s.persistSinglePhoto(folderID, payload.PhotoID, state, writer)
+	case bus.CommandToggleStarPayload,
+		bus.CommandLabelPhotoPayload,
+		bus.CommandTrashPhotoPayload,
+		bus.CommandRotatePhotoPayload:
+		s.persistSinglePhoto(folderID, photoIDFromPayload(payload), state, writer)
 	case bus.CommandBatchPayload:
 		// Multiple photos changed: rebuild full folder metadata.
 		s.persistFullFolder(folderID, state, writer)

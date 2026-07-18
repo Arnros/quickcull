@@ -675,14 +675,8 @@ func (c *MediaCache) GetFilteredIndices(state *State, filters map[string]string)
 		}
 	}()
 
-	targetCamera := filters["camera"]
-	targetISO := filters["iso"]
-	targetDateFrom := strings.TrimSpace(filters["dateFrom"])
-	targetDateTo := strings.TrimSpace(filters["dateTo"])
-	minBytes, hasMin := parseSizeFilterBytes(filters["sizeMin"])
-	maxBytes, hasMax := parseSizeFilterBytes(filters["sizeMax"])
-
-	if targetCamera == "" && targetISO == "" && targetDateFrom == "" && targetDateTo == "" && !hasMin && !hasMax {
+	criteria := parseMediaFilters(filters)
+	if criteria.empty() {
 		return nil
 	}
 
@@ -694,47 +688,8 @@ func (c *MediaCache) GetFilteredIndices(state *State, filters map[string]string)
 			continue
 		}
 
-		if hasMin || hasMax {
-			st, err := os.Stat(absPath)
-			if err != nil {
-				continue
-			}
-			size := st.Size()
-			if hasMin && size < minBytes {
-				continue
-			}
-			if hasMax && size > maxBytes {
-				continue
-			}
-		}
-
-		if targetCamera != "" || targetISO != "" || targetDateFrom != "" || targetDateTo != "" {
-			info := c.GetMetadataCached(absPath)
-			if info == nil {
-				continue
-			}
-
-			if targetCamera != "" && info.Camera != targetCamera {
-				continue
-			}
-			if targetISO != "" && info.ISO != targetISO {
-				continue
-			}
-			if targetDateFrom != "" || targetDateTo != "" {
-				fileDate := strings.TrimSpace(info.Date)
-				if len(fileDate) >= dateCompareLength {
-					fileDate = fileDate[:dateCompareLength]
-				}
-				if fileDate == "" {
-					continue
-				}
-				if targetDateFrom != "" && fileDate < targetDateFrom {
-					continue
-				}
-				if targetDateTo != "" && fileDate > targetDateTo {
-					continue
-				}
-			}
+		if !criteria.matchesPath(c, absPath) {
+			continue
 		}
 
 		indices = append(indices, idx)
@@ -742,6 +697,67 @@ func (c *MediaCache) GetFilteredIndices(state *State, filters map[string]string)
 
 	sort.Ints(indices)
 	return indices
+}
+
+type mediaFilters struct {
+	camera, iso        string
+	dateFrom, dateTo   string
+	minBytes, maxBytes int64
+	hasMin, hasMax     bool
+}
+
+func parseMediaFilters(filters map[string]string) mediaFilters {
+	minBytes, hasMin := parseSizeFilterBytes(filters["sizeMin"])
+	maxBytes, hasMax := parseSizeFilterBytes(filters["sizeMax"])
+	return mediaFilters{
+		camera:   filters["camera"],
+		iso:      filters["iso"],
+		dateFrom: strings.TrimSpace(filters["dateFrom"]),
+		dateTo:   strings.TrimSpace(filters["dateTo"]),
+		minBytes: minBytes,
+		maxBytes: maxBytes,
+		hasMin:   hasMin,
+		hasMax:   hasMax,
+	}
+}
+
+func (f mediaFilters) empty() bool {
+	return f.camera == "" && f.iso == "" && f.dateFrom == "" && f.dateTo == "" && !f.hasMin && !f.hasMax
+}
+
+func (f mediaFilters) matchesPath(cache *MediaCache, path string) bool {
+	if f.hasMin || f.hasMax {
+		st, err := os.Stat(path)
+		if err != nil || !f.matchesSize(st.Size()) {
+			return false
+		}
+	}
+	if !f.needsMetadata() {
+		return true
+	}
+	return f.matchesMetadata(cache.GetMetadataCached(path))
+}
+
+func (f mediaFilters) matchesSize(size int64) bool {
+	return (!f.hasMin || size >= f.minBytes) && (!f.hasMax || size <= f.maxBytes)
+}
+
+func (f mediaFilters) needsMetadata() bool {
+	return f.camera != "" || f.iso != "" || f.dateFrom != "" || f.dateTo != ""
+}
+
+func (f mediaFilters) matchesMetadata(info *EXIFInfo) bool {
+	if info == nil || (f.camera != "" && info.Camera != f.camera) || (f.iso != "" && info.ISO != f.iso) {
+		return false
+	}
+	if f.dateFrom == "" && f.dateTo == "" {
+		return true
+	}
+	fileDate := strings.TrimSpace(info.Date)
+	if len(fileDate) >= dateCompareLength {
+		fileDate = fileDate[:dateCompareLength]
+	}
+	return fileDate != "" && (f.dateFrom == "" || fileDate >= f.dateFrom) && (f.dateTo == "" || fileDate <= f.dateTo)
 }
 
 func parseSizeFilterBytes(raw string) (int64, bool) {

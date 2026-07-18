@@ -1,5 +1,6 @@
 <script lang="ts">
   import { appState } from "../appState.svelte";
+  import { filterState } from "../filterState.svelte";
   import { cameraLabel } from "../cameraLabel";
   import { i18n } from "../i18n.svelte";
   import { buildFolderTree, type TreeNode } from "../treeUtils";
@@ -119,13 +120,13 @@
     </div>
   </div>
   <div class="filters-list">
-    {#if appState.filters.cameras.length > 0}
+    {#if filterState.filters.cameras.length > 0}
       <div class="filter-group">
         <div class="filter-title">{i18n.t("camera")}</div>
-        {#each appState.filters.cameras as camera}
+        {#each filterState.filters.cameras as camera}
           <button 
             class="filter-btn" 
-            class:active={appState.activeFilters.camera === camera}
+            class:active={filterState.activeFilters.camera === camera}
             onclick={() => appState.setFilter('camera', camera)}
           >
             {cameraLabel(camera)}
@@ -134,14 +135,14 @@
       </div>
     {/if}
 
-    {#if appState.filters.isos.length > 0}
+    {#if filterState.filters.isos.length > 0}
       <div class="filter-group">
         <div class="filter-title">{i18n.t('iso_label')}</div>
         <div class="filter-chips">
-          {#each appState.filters.isos as iso}
+          {#each filterState.filters.isos as iso}
             <button 
               class="chip" 
-              class:active={appState.activeFilters.iso === iso}
+              class:active={filterState.activeFilters.iso === iso}
               onclick={() => appState.setFilter('iso', iso)}
             >
               {iso}
@@ -151,7 +152,7 @@
       </div>
     {/if}
 
-    {#if appState.activeFilters.camera || appState.activeFilters.iso}
+    {#if filterState.activeFilters.camera || filterState.activeFilters.iso}
       <button class="clear-filters" onclick={() => appState.clearFilters()}>
         {i18n.t("clear_filters")}
       </button>

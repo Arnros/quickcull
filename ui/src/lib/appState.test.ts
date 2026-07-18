@@ -14,6 +14,11 @@ vi.mock('./api', () => ({
     undo: vi.fn(),
     toggleStar: vi.fn(),
     setLabel: vi.fn(),
+    rotate: vi.fn(),
+    rotateReset: vi.fn(),
+    applyRotation: vi.fn(),
+    reanalyzeMetadata: vi.fn(),
+    updateConfig: vi.fn(),
     getStarredIndices: vi.fn(),
     getFile: vi.fn(),
     getFolders: vi.fn(),
@@ -110,6 +115,8 @@ vi.mock('./navigationService.svelte', () => ({
 import { api } from './api';
 import { appState } from './appState.svelte';
 import { navigationService } from './navigationService.svelte';
+import { filterState } from './filterState.svelte';
+import { viewState } from './viewState.svelte';
 
 describe('AppState cache-busting on media-changing actions', () => {
   beforeEach(() => {
@@ -151,9 +158,9 @@ describe('AppState cache-busting on media-changing actions', () => {
     } as any;
     appState.currentIndex = 0;
     appState.selectedIndices = [0];
-    appState.filterMode = 'none';
-    appState.activeFilters = {};
-    appState.comparisonMode = false;
+    filterState.filterMode = 'none';
+    filterState.activeFilters = {};
+    viewState.comparisonMode = false;
     appState.gridColumns = 5;
     appState.v2 = {
       VisibleOrder: ['a.jpg', 'b.jpg'],
@@ -288,46 +295,46 @@ describe('AppState cache-busting on media-changing actions', () => {
   });
 
   it('clears reference file when leaving comparison mode', async () => {
-    appState.comparisonMode = true;
+    viewState.comparisonMode = true;
     appState.referenceFile = { filename: 'ref.jpg' } as any;
 
     await appState.toggleComparisonMode();
 
-    expect(appState.comparisonMode).toBe(false);
+    expect(viewState.comparisonMode).toBe(false);
     expect(appState.referenceFile).toBeNull();
   });
 
   it('exits duplicates mode consistently', () => {
-    appState.filterMode = 'duplicates' as any;
-    appState.gridOpen = true;
-    appState.comparisonMode = true;
+    filterState.filterMode = 'duplicates' as any;
+    viewState.gridOpen = true;
+    viewState.comparisonMode = true;
     appState.referenceFile = { filename: 'ref.jpg' } as any;
-    appState.filteredIndices = [1, 2];
-    appState.duplicateGroups = [[1, 2]];
+    filterState.filteredIndices = [1, 2];
+    filterState.duplicateGroups = [[1, 2]];
 
     appState.exitDuplicatesMode();
 
-    expect(appState.filterMode).toBe('none');
-    expect(appState.gridOpen).toBe(false);
-    expect(appState.comparisonMode).toBe(false);
+    expect(filterState.filterMode).toBe('none');
+    expect(viewState.gridOpen).toBe(false);
+    expect(viewState.comparisonMode).toBe(false);
     expect(appState.referenceFile).toBeNull();
-    expect(appState.filteredIndices).toEqual([]);
-    expect(appState.duplicateGroups).toEqual([]);
+    expect(filterState.filteredIndices).toEqual([]);
+    expect(filterState.duplicateGroups).toEqual([]);
   });
 
   it('keeps grid open when disabling duplicates from grid view', async () => {
-    appState.filterMode = 'duplicates' as any;
-    appState.gridOpen = true;
-    appState.comparisonMode = false;
-    appState.filteredIndices = [1, 2];
-    appState.duplicateGroups = [[1, 2]];
+    filterState.filterMode = 'duplicates' as any;
+    viewState.gridOpen = true;
+    viewState.comparisonMode = false;
+    filterState.filteredIndices = [1, 2];
+    filterState.duplicateGroups = [[1, 2]];
 
     await appState.toggleDuplicatesFilter();
 
-    expect(appState.filterMode).toBe('none');
-    expect(appState.gridOpen).toBe(true);
-    expect(appState.filteredIndices).toEqual([]);
-    expect(appState.duplicateGroups).toEqual([]);
+    expect(filterState.filterMode).toBe('none');
+    expect(viewState.gridOpen).toBe(true);
+    expect(filterState.filteredIndices).toEqual([]);
+    expect(filterState.duplicateGroups).toEqual([]);
   });
 
   it('captures scheduler telemetry from progress payload', () => {
@@ -353,30 +360,30 @@ describe('AppState cache-busting on media-changing actions', () => {
   });
 
   it('keeps grid open when disabling starred filter from grid view', async () => {
-    appState.filterMode = 'starred' as any;
-    appState.gridOpen = true;
-    appState.comparisonMode = false;
-    appState.filteredIndices = [1, 2];
+    filterState.filterMode = 'starred' as any;
+    viewState.gridOpen = true;
+    viewState.comparisonMode = false;
+    filterState.filteredIndices = [1, 2];
 
     await appState.toggleStarFilter();
 
-    expect(appState.filterMode).toBe('none');
-    expect(appState.gridOpen).toBe(true);
-    expect(appState.filteredIndices).toEqual([]);
+    expect(filterState.filterMode).toBe('none');
+    expect(viewState.gridOpen).toBe(true);
+    expect(filterState.filteredIndices).toEqual([]);
   });
 
   it('keeps grid open when disabling label filter from grid view', async () => {
-    appState.filterMode = 'label' as any;
-    appState.activeLabelFilter = 3 as any;
-    appState.gridOpen = true;
-    appState.comparisonMode = false;
-    appState.filteredIndices = [1, 2];
+    filterState.filterMode = 'label' as any;
+    filterState.activeLabelFilter = 3 as any;
+    viewState.gridOpen = true;
+    viewState.comparisonMode = false;
+    filterState.filteredIndices = [1, 2];
 
     await appState.setLabelFilter(3);
 
-    expect(appState.filterMode).toBe('none');
-    expect(appState.gridOpen).toBe(true);
-    expect(appState.filteredIndices).toEqual([]);
+    expect(filterState.filterMode).toBe('none');
+    expect(viewState.gridOpen).toBe(true);
+    expect(filterState.filteredIndices).toEqual([]);
   });
 
   it('disables EXIF apply when runtime capability exifWrite is false', () => {
@@ -585,9 +592,9 @@ describe('AppState cache-busting on media-changing actions', () => {
   it('does not expose moved filtered photos when filters are reset before structural sync', async () => {
     (api.browseDialog as any).mockResolvedValue({ path: '/remote' });
     (api.exportFiles as any).mockResolvedValue(undefined);
-    appState.filterMode = 'label';
-    appState.activeLabelFilter = 1;
-    appState.filteredIndices = [0, 1, 2];
+    filterState.filterMode = 'label';
+    filterState.activeLabelFilter = 1;
+    filterState.filteredIndices = [0, 1, 2];
     appState.selectedIndices = [0, 1, 2];
     appState.v2 = {
       ...appState.v2!,
@@ -621,9 +628,9 @@ describe('AppState cache-busting on media-changing actions', () => {
   it('removes moved label matches before resetting the label filter', async () => {
     (api.browseDialog as any).mockResolvedValue({ path: '/remote' });
     (api.exportSelection as any).mockResolvedValue(undefined);
-    appState.filterMode = 'label';
-    appState.activeLabelFilter = 1;
-    appState.filteredIndices = [0, 1, 2];
+    filterState.filterMode = 'label';
+    filterState.activeLabelFilter = 1;
+    filterState.filteredIndices = [0, 1, 2];
     appState.selectedIndices = [];
     appState.v2 = {
       ...appState.v2!,
@@ -720,14 +727,14 @@ describe('AppState cache-busting on media-changing actions', () => {
       Root: '/source',
       VisibleOrder: ['a.jpg', 'b.jpg'],
     } as any;
-    appState.filteredIndices = [0, 1];
+    filterState.filteredIndices = [0, 1];
     appState.selectedIndices = [0, 1];
 
     (appState as any).onExportComplete({ root: '/source', movedPaths: ['a.jpg', 'b.jpg'] });
 
     expect(appState.v2?.VisibleOrder).toEqual([]);
     expect(appState.v2?.Photos).toEqual({});
-    expect(appState.filteredIndices).toEqual([]);
+    expect(filterState.filteredIndices).toEqual([]);
     expect(appState.selectedIndices).toEqual([]);
   });
 
@@ -799,6 +806,49 @@ describe('AppState cache-busting on media-changing actions', () => {
 
     expect(appState.canApplyExifWrite()).toBe(false);
     expect(appState.canApplyRotation()).toBe(false);
+  });
+
+  it('delegates rotate reset for the active photo', async () => {
+    (api.rotateReset as any).mockResolvedValue({ ok: true });
+
+    await appState.rotateReset();
+
+    expect(api.rotateReset).toHaveBeenCalledWith(0, 'a.jpg');
+    expect(appState.lastNonUndoableAction).toBe('');
+  });
+
+  it('applies physical rotation then reloads the active photo', async () => {
+    (api.applyRotation as any).mockResolvedValue(undefined);
+    appState.currentFile = { ...appState.currentFile!, rotation: 90, format: 'JPEG' } as any;
+    appState.runtimeCapabilities = { exifWrite: true } as any;
+    const previousVersion = appState.sessionVersion;
+
+    await appState.applyRotation();
+
+    expect(api.applyRotation).toHaveBeenCalledWith(0, 'a.jpg');
+    expect(navigationService.loadFile).toHaveBeenCalledWith(0, false);
+    expect(appState.sessionVersion).not.toBe(previousVersion);
+    expect(appState.lastNonUndoableAction).toBe('apply_rotation');
+  });
+
+  it('replaces currentFile with reanalyzed metadata', async () => {
+    const refreshed = { ...appState.currentFile!, camera: 'Updated Camera' } as any;
+    (api.reanalyzeMetadata as any).mockResolvedValue(refreshed);
+
+    await appState.reanalyzeMetadata();
+
+    expect(api.reanalyzeMetadata).toHaveBeenCalledWith(0, 'a.jpg');
+    expect(appState.currentFile).toEqual(refreshed);
+  });
+
+  it('persists auto-advance before updating local config', async () => {
+    (api.updateConfig as any).mockResolvedValue({ ok: true });
+    viewState.config = { autoAdvance: false } as any;
+
+    await appState.toggleAutoAdvance();
+
+    expect(api.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ autoAdvance: true }));
+    expect(viewState.config?.autoAdvance).toBe(true);
   });
 
   it('refreshes exactly once when the backend emits folder:changed', async () => {

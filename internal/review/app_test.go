@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"sync"
@@ -898,6 +899,344 @@ func TestApplyRotationUnsupportedFormat(t *testing.T) {
 	if err := app.ApplyRotation(0, name); err != domain.ErrExifWriteUnsupported {
 		t.Fatalf("want ErrExifWriteUnsupported, got %v", err)
 	}
+}
+
+func TestApplyRotationFailurePreservesVisualRotation(t *testing.T) {
+	originalApply := applyEXIFOrientation
+	applyEXIFOrientation = func(context.Context, string, int) error {
+		return domain.ErrExiftoolApplyFailed
+	}
+	t.Cleanup(func() { applyEXIFOrientation = originalApply })
+
+	_, app, cleanup := setupPhysicalTest(t)
+	defer cleanup()
+	if _, _, err := app.server.applyEvent(bus.Event{
+		Type:    bus.TypeCommandRotatePhoto,
+		Payload: bus.CommandRotatePhotoPayload{PhotoID: "a.jpg", Direction: "right"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.ApplyRotation(0, "a.jpg")
+
+	if err != domain.ErrExiftoolApplyFailed {
+		t.Fatalf("ApplyRotation error = %v, want ErrExiftoolApplyFailed", err)
+	}
+	app.server.appStateMu.RLock()
+	rotation := app.server.appState.Photos["a.jpg"].Rotation
+	app.server.appStateMu.RUnlock()
+	if rotation != 90 {
+		t.Fatalf("visual rotation = %d after EXIF failure, want 90", rotation)
+	}
+}
+
+func TestSetLabelRejectsOutOfRangeValues(t *testing.T) {
+	for _, label := range []int{-1, domain.MaxLabel + 1} {
+		t.Run(fmt.Sprintf("label_%d", label), func(t *testing.T) {
+			app, server, _ := newAppWithState(t, []string{"a.jpg", "b.jpg"})
+			for _, batch := range []bool{false, true} {
+				var paths []string
+				if batch {
+					paths = []string{"a.jpg", "b.jpg"}
+				}
+				if _, err := app.SetLabel(0, "a.jpg", paths, label); err != domain.ErrInvalidCriteria {
+					t.Fatalf("batch=%v error=%v, want ErrInvalidCriteria", batch, err)
+				}
+			}
+			server.appStateMu.RLock()
+			defer server.appStateMu.RUnlock()
+			for id, photo := range server.appState.Photos {
+				if photo.Label != 0 {
+					t.Fatalf("%s label changed to %d", id, photo.Label)
+				}
+			}
+		})
+	}
+}
+
+func TestRotateRejectsInvalidDirectionsIncludingReset(t *testing.T) {
+	for _, direction := range []string{"up", "reset", "foobar", ""} {
+		t.Run(direction, func(t *testing.T) {
+			app, server, _ := newAppWithState(t, []string{"a.jpg"})
+			if _, err := app.Rotate(0, "a.jpg", direction); err != domain.ErrInvalidRotationDir {
+				t.Fatalf("Rotate(%q) error = %v, want ErrInvalidRotationDir", direction, err)
+			}
+			server.appStateMu.RLock()
+			rotation := server.appState.Photos["a.jpg"].Rotation
+			server.appStateMu.RUnlock()
+			if rotation != 0 {
+				t.Fatalf("rotation changed to %d", rotation)
+			}
+		})
+	}
+}
+
+func TestUpdateConfigResetsExiftoolAvailabilityCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	originalReset := resetExiftoolAvailabilityCache
+	resetCalls := 0
+	resetExiftoolAvailabilityCache = func() { resetCalls++ }
+	t.Cleanup(func() { resetExiftoolAvailabilityCache = originalReset })
+
+	app := NewApp(NewServer())
+	cfg := domain.GetConfig()
+	cfg.Debug = !cfg.Debug
+	if err := app.UpdateConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if resetCalls != 1 {
+		t.Fatalf("exiftool cache reset calls = %d, want 1", resetCalls)
+	}
+}
+
+func TestGetFiltersAndFilteredIndicesWithPopulatedCache(t *testing.T) {
+	app, server, root := newAppWithState(t, []string{"a.jpg", "b.jpg", "c.jpg"})
+	metadata := map[string]*EXIFInfo{
+		filepath.Join(root, "a.jpg"): {Camera: "Canon", ISO: "100"},
+		filepath.Join(root, "b.jpg"): {Camera: "Sony", ISO: "400"},
+		filepath.Join(root, "c.jpg"): {Camera: "Canon", ISO: "400"},
+	}
+	server.cache.persistence = &mockCache{hashes: map[string]uint64{}, metadata: metadata}
+
+	filters, err := app.GetFilters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(filters.Cameras, []string{"Canon", "Sony"}) || !slices.Equal(filters.ISOs, []string{"100", "400"}) {
+		t.Fatalf("filters = %+v", filters)
+	}
+	indices, err := app.GetFilteredIndices(map[string]string{"camera": "Canon", "iso": "400"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(indices.Indices, []int{2}) {
+		t.Fatalf("filtered indices = %v, want [2]", indices.Indices)
+	}
+}
+
+func TestGetBookmarksIncludesOnlyExistingStandardFolders(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("UserHomeDir environment semantics differ on Windows")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, name := range []string{"Pictures", "Downloads"} {
+		if err := os.Mkdir(filepath.Join(home, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := NewApp(NewServer()).GetBookmarks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := make([]string, 0, len(res.Bookmarks))
+	for _, bookmark := range res.Bookmarks {
+		labels = append(labels, bookmark.Label)
+	}
+	if !slices.Equal(labels, []string{"Home", "Pictures", "Downloads"}) {
+		t.Fatalf("bookmark labels = %v", labels)
+	}
+}
+
+func TestGetDuplicatesEmptyStateReturnsNonNilSlice(t *testing.T) {
+	app, _, _ := newAppWithState(t, []string{})
+	groups, err := app.GetDuplicates(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groups == nil || len(groups) != 0 {
+		t.Fatalf("groups = %#v, want empty non-nil slice", groups)
+	}
+}
+
+func TestValidatedExportSavePath(t *testing.T) {
+	t.Run("relative", func(t *testing.T) {
+		if _, err := validatedExportSavePath("relative.log"); err != domain.ErrExportFailed {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("missing parent", func(t *testing.T) {
+		_, err := validatedExportSavePath(filepath.Join(t.TempDir(), "missing", "logs.txt"))
+		if !os.IsNotExist(err) {
+			t.Fatalf("error = %v, want not-exist", err)
+		}
+	})
+	t.Run("parent is file", func(t *testing.T) {
+		parent := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := validatedExportSavePath(filepath.Join(parent, "logs.txt")); err != domain.ErrExportFailed {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
+func TestSetSortOrderViaAppPrefersExifDateOverMtime(t *testing.T) {
+	app, server, root := newAppWithState(t, []string{"a.jpg", "b.jpg"})
+	now := time.Now()
+	for _, name := range []string{"a.jpg", "b.jpg"} {
+		if err := os.Chtimes(filepath.Join(root, name), now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server.cache.mu.Lock()
+	server.cache.exifCache[filepath.Join(root, "a.jpg")] = &EXIFInfo{Date: "2020:01:01 10:00:00"}
+	server.cache.exifCache[filepath.Join(root, "b.jpg")] = &EXIFInfo{Date: "2019:01:01 10:00:00"}
+	server.cache.mu.Unlock()
+
+	if err := app.SetSortOrder("date"); err != nil {
+		t.Fatal(err)
+	}
+	server.appStateMu.RLock()
+	order := append([]string(nil), server.appState.VisibleOrder...)
+	server.appStateMu.RUnlock()
+	if !slices.Equal(order, []string{"b.jpg", "a.jpg"}) {
+		t.Fatalf("date order = %v, want [b.jpg a.jpg]", order)
+	}
+	if err := app.SetSortOrder("name"); err != nil {
+		t.Fatal(err)
+	}
+	server.appStateMu.RLock()
+	order = append([]string(nil), server.appState.VisibleOrder...)
+	server.appStateMu.RUnlock()
+	if !slices.Equal(order, []string{"a.jpg", "b.jpg"}) {
+		t.Fatalf("name order = %v", order)
+	}
+}
+
+func TestBatchTrashPartialFailureKeepsFailedPhotoCoherent(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires Unix owner permission semantics")
+	}
+	files := []string{"a.jpg", "b.jpg", "locked/c.jpg"}
+	app, server, root := newAppWithState(t, files)
+	lockedDir := filepath.Join(root, "locked")
+	if err := os.Chmod(lockedDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o755) })
+
+	res, err := app.Trash(0, "", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 1 {
+		t.Fatalf("remaining total = %d, want 1", res.Total)
+	}
+	if _, err := os.Stat(filepath.Join(root, "locked/c.jpg")); err != nil {
+		t.Fatalf("failed photo should remain physically: %v", err)
+	}
+	server.appStateMu.RLock()
+	order := append([]string(nil), server.appState.VisibleOrder...)
+	_, retained := server.appState.Photos["locked/c.jpg"]
+	server.appStateMu.RUnlock()
+	if !slices.Equal(order, []string{"locked/c.jpg"}) || !retained {
+		t.Fatalf("logical state lost failed photo: order=%v retained=%v", order, retained)
+	}
+}
+
+func TestTrashConcurrentWithRefreshKeepsStateCoherent(t *testing.T) {
+	app, server, _ := newAppWithState(t, []string{"a.jpg", "b.jpg", "c.jpg"})
+	scanStarted := make(chan struct{})
+	allowScanReturn := make(chan struct{})
+	setScanFilesForTest(t, func(_ string, filesChan chan<- string) error {
+		defer close(filesChan)
+		for _, path := range []string{"a.jpg", "b.jpg", "c.jpg"} {
+			filesChan <- path
+		}
+		close(scanStarted)
+		<-allowScanReturn
+		return nil
+	})
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		_, err := app.Refresh(0)
+		refreshDone <- err
+	}()
+	<-scanStarted
+	trashDone := make(chan error, 1)
+	go func() {
+		_, err := app.Trash(1, "b.jpg", nil)
+		trashDone <- err
+	}()
+	var trashErr error
+	trashCompleted := false
+	select {
+	case trashErr = <-trashDone:
+		trashCompleted = true
+		// Current unlocked implementation reaches this branch and exposes the
+		// stale-scan race. A serialized implementation waits for refresh.
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(allowScanReturn)
+	if err := <-refreshDone; err != nil {
+		t.Fatal(err)
+	}
+	if !trashCompleted {
+		trashErr = <-trashDone
+	}
+	if trashErr != nil {
+		t.Fatal(trashErr)
+	}
+
+	server.appStateMu.RLock()
+	order := append([]string(nil), server.appState.VisibleOrder...)
+	trashedPhoto, retainedForUndo := server.appState.Photos["b.jpg"]
+	server.appStateMu.RUnlock()
+	if !slices.Equal(order, []string{"a.jpg", "c.jpg"}) || !retainedForUndo || !trashedPhoto.IsTrashed {
+		t.Fatalf("incoherent state after concurrent trash/refresh: order=%v retained=%v photo=%+v", order, retainedForUndo, trashedPhoto)
+	}
+	if server.getState().FindIndex("b.jpg") != -1 {
+		t.Fatal("physical state reintroduced trashed b.jpg")
+	}
+}
+
+func TestGetFilePrioritizesAnalysisRange(t *testing.T) {
+	app, server, _ := newAppWithState(t, []string{"a.jpg", "b.jpg", "c.jpg"})
+	server.analysisQueue.Reset()
+	if _, err := app.GetFile(1, false); err != nil {
+		t.Fatal(err)
+	}
+	interactive, warm, bulk := server.analysisQueue.DepthByTier()
+	if interactive == 0 || interactive+warm+bulk != 3 {
+		t.Fatalf("queue depths = interactive:%d warm:%d bulk:%d", interactive, warm, bulk)
+	}
+}
+
+func TestStartupInitializesPersistenceAndEventEngine(t *testing.T) {
+	t.Setenv("QUICKCULL_TEST_CACHE_DIR", t.TempDir())
+	server := NewServer()
+	app := NewApp(server)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := app.Startup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if server.persistence == nil {
+		t.Fatal("persistence was not initialized")
+	}
+	// Keep the event engine context, but disable Wails runtime emission because
+	// this unit test does not run inside a Wails lifecycle context.
+	server.ctx = nil
+	t.Cleanup(func() { _ = server.persistence.Close() })
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.jpg"), []byte("jpeg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.LoadState(root); err != nil {
+		t.Fatal(err)
+	}
+	server.Bus.Publish(bus.Event{
+		Type:    bus.TypeCommandLabelPhoto,
+		Payload: bus.CommandLabelPhotoPayload{PhotoID: "a.jpg", Label: 2},
+	})
+	waitForCondition(t, "event engine label", func() bool {
+		server.appStateMu.RLock()
+		defer server.appStateMu.RUnlock()
+		return server.appState != nil && server.appState.Photos["a.jpg"].Label == 2
+	})
 }
 
 func TestReanalyzeMetadataViaApp(t *testing.T) {

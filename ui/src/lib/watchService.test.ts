@@ -1,13 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { refresh, loadFile, mockedAppState } = vi.hoisted(() => {
+const { refresh, loadFile, mockedAppState, mockedViewState } = vi.hoisted(() => {
   const loadFile = vi.fn(async () => undefined);
   return {
     refresh: vi.fn(),
     loadFile,
     mockedAppState: {
-      config: { autoRefresh: true, autoRefreshSeconds: 5 },
-      view: 'review',
       loading: false,
       stats: { total: 1 },
       currentIndex: 0,
@@ -15,11 +13,16 @@ const { refresh, loadFile, mockedAppState } = vi.hoisted(() => {
       sessionVersion: 1,
       loadFile,
     },
+    mockedViewState: {
+      config: { autoRefresh: true, autoRefreshSeconds: 5 },
+      current: 'review',
+    },
   };
 });
 
 vi.mock('./api', () => ({ api: { refresh } }));
 vi.mock('./appState.svelte', () => ({ appState: mockedAppState }));
+vi.mock('./viewState.svelte', () => ({ viewState: mockedViewState }));
 vi.mock('./logger', () => ({
   logger: { info: vi.fn(), debug: vi.fn() },
 }));

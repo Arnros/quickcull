@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { appState } from "../appState.svelte";
+  import { filterState } from "../filterState.svelte";
   import { i18n } from "../i18n.svelte";
   import Icon from "./Icon.svelte";
   import { logger } from "../logger";
@@ -35,9 +36,9 @@
    */
   let items = $derived.by((): (number | null)[] => {
     const hasFilters =
-      appState.filterMode !== "none" ||
-      Object.keys(appState.activeFilters).length > 0;
-    if (hasFilters) return appState.filteredIndices;
+      filterState.filterMode !== "none" ||
+      Object.keys(filterState.activeFilters).length > 0;
+    if (hasFilters) return filterState.filteredIndices;
 
     const cols = virtual.columns;
     const folders = appState.folders;
@@ -111,10 +112,10 @@
     if (e.detail > 1) {
       // Double click to open and close grid
       appState.select(i, false, false);
-      if (appState.filterMode === "duplicates") {
-        appState.comparisonMode = true;
+      if (filterState.filterMode === "duplicates") {
+        viewState.comparisonMode = true;
       }
-      appState.gridOpen = false;
+      viewState.gridOpen = false;
       return;
     }
     appState.select(i, e.ctrlKey || e.metaKey, e.shiftKey);
@@ -184,7 +185,7 @@
   // Sync scroll when currentIndex changes or when container dimensions become available
   $effect(() => {
     const idx = appState.currentIndex;
-    const open = appState.gridOpen;
+    const open = viewState.gridOpen;
     const h = virtual.containerHeight;
     const w = virtual.containerWidth;
     const total = items.length;
@@ -200,7 +201,7 @@
 
   // Ensure keyboard shortcuts bound on the overlay (e.g. Ctrl/Cmd+A) are received.
   $effect(() => {
-    if (!appState.gridOpen) return;
+    if (!viewState.gridOpen) return;
     queueMicrotask(() => {
       const overlay = container?.closest('.grid-overlay') as HTMLDivElement | null;
       overlay?.focus();
@@ -229,7 +230,7 @@
           variant="mini"
           icon="star"
           class="star-filter"
-          active={appState.filterMode === "starred"}
+          active={filterState.filterMode === "starred"}
           onclick={() => appState.toggleStarFilter()}
           title={i18n.t("starred")}
         />
@@ -240,8 +241,8 @@
           <Button
             variant="mini"
             class="label-filter"
-            active={appState.filterMode === "label" &&
-              appState.activeLabelFilter === i}
+            active={filterState.filterMode === "label" &&
+              filterState.activeLabelFilter === i}
             onclick={() => appState.setLabelFilter(i)}
             title={`${i18n.t("labeled")} ${i}`}
           >
@@ -251,8 +252,8 @@
 
         <Button
           variant="mini"
-          active={appState.filterMode === "label" &&
-            appState.activeLabelFilter === 0}
+          active={filterState.filterMode === "label" &&
+            filterState.activeLabelFilter === 0}
           onclick={() => appState.setLabelFilter(0)}
           title={i18n.t("labeled")}
         >
@@ -266,7 +267,7 @@
 
         <Button
           variant="mini"
-          active={appState.filterMode === "duplicates"}
+          active={filterState.filterMode === "duplicates"}
           onclick={() => appState.toggleDuplicatesFilter()}
           title={i18n.t("duplicates")}
         >👯</Button>
@@ -279,7 +280,7 @@
       <span class="selection-count"
         >{appState.selectedIndices.length} {i18n.t("selected")}</span
       >
-      <Button variant="primary" icon="close" onclick={() => (appState.gridOpen = false)}>
+      <Button variant="primary" icon="close" onclick={() => (viewState.gridOpen = false)}>
         {i18n.t("close")} <Kbd key="V" variant="outline" />
       </Button>
     </div>
@@ -337,7 +338,7 @@
               isSelected={selectedSet.has(id)}
               burstIndex={appState.currentFile?.index === id ? appState.currentFile?.burst?.index : 0}
               burstCount={appState.currentFile?.index === id ? appState.currentFile?.burst?.count : 0}
-              role={appState.comparisonMode ? (id === appState.comparisonIndex ? 'reference' : (id === appState.currentIndex ? 'active' : 'none')) : 'none'}
+              role={viewState.comparisonMode ? (id === appState.comparisonIndex ? 'reference' : (id === appState.currentIndex ? 'active' : 'none')) : 'none'}
             />
 
             {#if folderStartMap.has(id)}

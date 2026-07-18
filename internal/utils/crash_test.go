@@ -59,7 +59,6 @@ func TestHandlePanicWritesCrashSinkAndSyncs(t *testing.T) {
 	}()
 
 	// HandlePanic recovers, logs, and notifies but does NOT exit.
-	// Exit is reserved for HandlePanicFatal.
 
 	select {
 	case msg := <-notifyMsg:
@@ -81,44 +80,6 @@ func TestHandlePanicWritesCrashSinkAndSyncs(t *testing.T) {
 	}
 	if got := logOut.String(); !strings.Contains(got, "CRITICAL PANIC") {
 		t.Fatalf("logger output = %q, want panic log", got)
-	}
-}
-
-func TestHandlePanicFatalExits(t *testing.T) {
-	oldSink := crashSink.Load()
-	oldExit := crashExit
-	oldNotify := crashNotify
-	t.Cleanup(func() {
-		crashSink.Store(oldSink)
-		crashExit = oldExit
-		crashNotify = oldNotify
-	})
-
-	crashOut := &syncBuffer{}
-	crashSink.Store(newCrashSink(crashOut))
-	crashNotify = func(string) {}
-
-	exitCode := make(chan int, 1)
-	crashExit = func(code int) {
-		exitCode <- code
-	}
-
-	func() {
-		defer HandlePanicFatal()
-		panic("fatal boom")
-	}()
-
-	select {
-	case code := <-exitCode:
-		if code != 1 {
-			t.Fatalf("crashExit code = %d, want 1", code)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("crashExit was not called")
-	}
-
-	if got := crashOut.String(); !strings.Contains(got, "CRITICAL PANIC DETECTED") {
-		t.Fatalf("crash sink output = %q, want panic header", got)
 	}
 }
 

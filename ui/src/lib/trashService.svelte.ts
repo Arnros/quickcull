@@ -1,5 +1,7 @@
 import { api } from './api';
 import { appState } from './appState.svelte';
+import { filterState } from './filterState.svelte';
+import { viewState } from './viewState.svelte';
 import { i18n } from './i18n.svelte';
 import { toastService } from './toast.svelte';
 import { logger } from './logger';
@@ -51,7 +53,7 @@ class TrashService {
     if (!target || this.isTrashing) return;
 
     this.isTrashing = true;
-    const wasInDuplicateCompare = appState.comparisonMode && appState.filterMode === FILTER_MODES.DUPLICATES;
+    const wasInDuplicateCompare = viewState.comparisonMode && filterState.filterMode === FILTER_MODES.DUPLICATES;
 
     try {
       const selectedPaths = getSelectedPaths(appState.selectedIndices, appState.v2?.VisibleOrder || []);
@@ -80,21 +82,21 @@ class TrashService {
       appState.sessionVersion = Date.now();
 
       await appState.refreshAfterStateMutation(res.index ?? 0, {
-        refreshFilters: hasActiveFiltering(appState.filterMode, appState.activeFilters),
+        refreshFilters: hasActiveFiltering(filterState.filterMode, filterState.activeFilters),
         resetDuplicateGroups: wasInDuplicateCompare,
       });
 
       if (res && res.total === 0) {
-        appState.view = 'picker';
+        viewState.current = 'picker';
       } else if (res && wasInDuplicateCompare) {
-        const hasRemainingDuplicatePair = appState.duplicateGroups.some((group) => group.length > 1);
+        const hasRemainingDuplicatePair = filterState.duplicateGroups.some((group) => group.length > 1);
         if (hasRemainingDuplicatePair) {
-          appState.gridOpen = false;
-          appState.comparisonMode = true;
+          viewState.gridOpen = false;
+          viewState.comparisonMode = true;
           await appState.next();
         } else {
-          appState.comparisonMode = false;
-          appState.gridOpen = true;
+          viewState.comparisonMode = false;
+          viewState.gridOpen = true;
         }
       }
 
@@ -126,15 +128,15 @@ class TrashService {
 
         const updates: Promise<unknown>[] = [
           appState.refreshAfterStateMutation(targetIndex, {
-            refreshFilters: hasActiveFiltering(appState.filterMode, appState.activeFilters)
+            refreshFilters: hasActiveFiltering(filterState.filterMode, filterState.activeFilters)
           })
         ];
 
         if (res.actionType === 'trash') {
           updates.push(appState.loadFolders());
           updates.push(appState.loadFilters());
-          if (appState.filterMode === FILTER_MODES.DUPLICATES) {
-            appState.duplicateGroups = [];
+          if (filterState.filterMode === FILTER_MODES.DUPLICATES) {
+            filterState.duplicateGroups = [];
             updates.push(appState.updateFilteredIndices());
           }
         }
@@ -194,8 +196,8 @@ class TrashService {
         appState.loadFilters(),
       ];
 
-      if (appState.filterMode === FILTER_MODES.DUPLICATES) {
-        appState.duplicateGroups = [];
+      if (filterState.filterMode === FILTER_MODES.DUPLICATES) {
+        filterState.duplicateGroups = [];
       }
 
       updates.push(appState.updateFilteredIndices());
@@ -207,14 +209,14 @@ class TrashService {
       }
 
       const targetIndex = res.index;
-      const isFiltered = (appState.filterMode !== FILTER_MODES.NONE || Object.keys(appState.activeFilters).length > 0);
+      const isFiltered = (filterState.filterMode !== FILTER_MODES.NONE || Object.keys(filterState.activeFilters).length > 0);
 
       updates.push(appState.loadFile(targetIndex));
 
       await Promise.all(updates);
 
       if (isFiltered) {
-        const list = appState.filteredIndices || [];
+        const list = filterState.filteredIndices || [];
         if (list.length === 0) {
           appState.currentFile = null;
         } else if (!list.includes(targetIndex)) {

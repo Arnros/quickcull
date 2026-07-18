@@ -1,4 +1,6 @@
 import { appState } from './appState.svelte';
+import { filterState } from './filterState.svelte';
+import { viewState } from './viewState.svelte';
 import { resolveShortcutContext } from './shortcutContext';
 import { logger } from './logger';
 
@@ -31,13 +33,13 @@ class ShortcutService {
 
   // FSM State: Reactive context resolution
   currentContext = $derived(resolveShortcutContext({
-    view: appState.view,
-    gridOpen: appState.gridOpen,
-    filterBarOpen: appState.filterBarOpen,
-    comparisonMode: appState.comparisonMode,
-    filterMode: appState.filterMode as any,
-    helpOpen: appState.helpOpen,
-    settingsOpen: appState.settingsOpen,
+    view: viewState.current,
+    gridOpen: viewState.gridOpen,
+    filterBarOpen: filterState.filterBarOpen,
+    comparisonMode: viewState.comparisonMode,
+    filterMode: filterState.filterMode as any,
+    helpOpen: viewState.helpOpen,
+    settingsOpen: viewState.settingsOpen,
   }));
 
   // Reactive mapping of Key -> ActionId
@@ -46,7 +48,7 @@ class ShortcutService {
   // Mapping of ActionId -> Keys (for display/Help)
   activeMappings = $derived.by(() => {
     const map: Record<ShortcutActionId, string[]> = {} as any;
-    const custom = appState.config?.shortcuts || {};
+    const custom = viewState.config?.shortcuts || {};
 
     const layout = this.detectLayout();
 
@@ -131,36 +133,36 @@ class ShortcutService {
       },
       { id: 'NAV_FIRST', descriptionKey: 'help_nav_first', category: 'navigation', action: (e) => appState.first(e.shiftKey, e.shiftKey && (e.ctrlKey || e.metaKey)), defaultQwerty: ['home'], defaultAzerty: ['home'] },
       { id: 'NAV_LAST', descriptionKey: 'help_nav_last', category: 'navigation', action: (e) => appState.last(e.shiftKey, e.shiftKey && (e.ctrlKey || e.metaKey)), defaultQwerty: ['end'], defaultAzerty: ['end'] },
-      { id: 'NAV_SIDEBAR', descriptionKey: 'help_nav_sidebar', category: 'navigation', action: (e) => { e.preventDefault(); appState.sidebarOpen = !appState.sidebarOpen; }, defaultQwerty: ['tab'], defaultAzerty: ['tab'] },
-      { id: 'NAV_FILMSTRIP', descriptionKey: 'help_nav_filmstrip', category: 'navigation', action: () => appState.filmstripOpen = !appState.filmstripOpen, defaultQwerty: ['g'], defaultAzerty: ['g'] },
+      { id: 'NAV_SIDEBAR', descriptionKey: 'help_nav_sidebar', category: 'navigation', action: (e) => { e.preventDefault(); viewState.sidebarOpen = !viewState.sidebarOpen; }, defaultQwerty: ['tab'], defaultAzerty: ['tab'] },
+      { id: 'NAV_FILMSTRIP', descriptionKey: 'help_nav_filmstrip', category: 'navigation', action: () => viewState.filmstripOpen = !viewState.filmstripOpen, defaultQwerty: ['g'], defaultAzerty: ['g'] },
 
       {
         id: 'VIEW_GRID', descriptionKey: 'help_view_grid', category: 'view', action: () => {
-          if (this.currentContext.screen === 'review_grid' && appState.filterMode === 'duplicates') {
+          if (this.currentContext.screen === 'review_grid' && filterState.filterMode === 'duplicates') {
             appState.exitDuplicatesMode();
             return;
           }
-          appState.gridOpen = !appState.gridOpen;
+          viewState.gridOpen = !viewState.gridOpen;
         }, defaultQwerty: ['v'], defaultAzerty: ['v']
       },
       {
         id: 'VIEW_TOGGLE_GRID', descriptionKey: 'help_view_grid', category: 'view', action: () => {
-          if (this.currentContext.screen === 'review_grid' && appState.filterMode === 'duplicates') {
+          if (this.currentContext.screen === 'review_grid' && filterState.filterMode === 'duplicates') {
             appState.exitDuplicatesMode();
             return;
           }
-          appState.gridOpen = !appState.gridOpen;
+          viewState.gridOpen = !viewState.gridOpen;
         }, defaultQwerty: ['enter'], defaultAzerty: ['enter']
       },
-      { id: 'VIEW_INFO', descriptionKey: 'help_view_info', category: 'view', action: () => appState.infoOpen = !appState.infoOpen, defaultQwerty: ['i'], defaultAzerty: ['i'] },
+      { id: 'VIEW_INFO', descriptionKey: 'help_view_info', category: 'view', action: () => viewState.infoOpen = !viewState.infoOpen, defaultQwerty: ['i'], defaultAzerty: ['i'] },
       {
         id: 'VIEW_FILTERS', descriptionKey: 'help_view_filters', category: 'view', action: () => {
-          appState.filterBarOpen = !appState.filterBarOpen;
-          if (appState.filterBarOpen) void appState.loadFilters();
+          filterState.filterBarOpen = !filterState.filterBarOpen;
+          if (filterState.filterBarOpen) void appState.loadFilters();
         }, defaultQwerty: ['f'], defaultAzerty: ['f']
       },
-      { id: 'VIEW_ZOOM', descriptionKey: 'help_view_zoom', category: 'view', action: () => appState.zoomed = !appState.zoomed, defaultQwerty: ['z'], defaultAzerty: ['z'] },
-      { id: 'VIEW_ZEN', descriptionKey: 'help_view_zen', category: 'view', action: () => appState.zenMode = !appState.zenMode, defaultQwerty: ['h'], defaultAzerty: ['h'] },
+      { id: 'VIEW_ZOOM', descriptionKey: 'help_view_zoom', category: 'view', action: () => viewState.zoomed = !viewState.zoomed, defaultQwerty: ['z'], defaultAzerty: ['z'] },
+      { id: 'VIEW_ZEN', descriptionKey: 'help_view_zen', category: 'view', action: () => viewState.zenMode = !viewState.zenMode, defaultQwerty: ['h'], defaultAzerty: ['h'] },
       { id: 'VIEW_COMPARISON', descriptionKey: 'help_view_comparison', category: 'view', action: () => appState.toggleComparisonMode(), defaultQwerty: ['c'], defaultAzerty: ['c'] },
 
       {
@@ -176,7 +178,7 @@ class ShortcutService {
       { id: 'ACTION_ROTATE_RESET', descriptionKey: 'help_action_rotate_reset', category: 'action', action: () => appState.rotateReset(), defaultQwerty: ['o'], defaultAzerty: ['o'] },
       { id: 'ACTION_APPLY_ROTATION', descriptionKey: 'help_action_apply_rotation', category: 'action', action: () => { if (appState.canApplyRotation()) appState.applyRotation(); }, defaultQwerty: ['w'], defaultAzerty: ['w'] },
       { id: 'ACTION_REFRESH', descriptionKey: 'help_sys_refresh', category: 'system', action: (e) => { e.preventDefault(); appState.refresh(); }, defaultQwerty: ['f5'], defaultAzerty: ['f5'] },
-      { id: 'ACTION_HELP', descriptionKey: 'help', category: 'system', action: () => appState.helpOpen = !appState.helpOpen, defaultQwerty: ['?'], defaultAzerty: ['?'] },
+      { id: 'ACTION_HELP', descriptionKey: 'help', category: 'system', action: () => viewState.helpOpen = !viewState.helpOpen, defaultQwerty: ['?'], defaultAzerty: ['?'] },
       { id: 'ACTION_CLOSE', descriptionKey: 'help_sys_close', category: 'system', action: () => this.handleEscape(), defaultQwerty: ['escape'], defaultAzerty: ['escape'] },
     ];
 
@@ -213,8 +215,8 @@ class ShortcutService {
     const screen = this.currentContext.screen;
 
     if (screen === 'modal') {
-      appState.helpOpen = false;
-      appState.settingsOpen = false;
+      viewState.helpOpen = false;
+      viewState.settingsOpen = false;
       return;
     }
 
@@ -225,22 +227,22 @@ class ShortcutService {
     }
 
     if (screen === 'review_grid') {
-      if (appState.filterMode === 'duplicates') {
+      if (filterState.filterMode === 'duplicates') {
         appState.exitDuplicatesMode();
         return;
       }
-      appState.gridOpen = false;
-      appState.filterBarOpen = false; // Close bar too if open
+      viewState.gridOpen = false;
+      filterState.filterBarOpen = false; // Close bar too if open
       return;
     }
 
     if (screen === 'review_filters') {
-      appState.filterBarOpen = false;
+      filterState.filterBarOpen = false;
       return;
     }
 
-    if (appState.zoomed) {
-      appState.zoomed = false;
+    if (viewState.zoomed) {
+      viewState.zoomed = false;
       return;
     }
 
@@ -254,15 +256,15 @@ class ShortcutService {
       return;
     }
 
-    if (appState.filterMode !== 'none') {
-      appState.filterMode = 'none';
-      appState.filteredIndices = [];
-      appState.filterBarOpen = false;
+    if (filterState.filterMode !== 'none') {
+      filterState.filterMode = 'none';
+      filterState.filteredIndices = [];
+      filterState.filterBarOpen = false;
       return;
     }
 
-    if (appState.zenMode) {
-      appState.zenMode = false;
+    if (viewState.zenMode) {
+      viewState.zenMode = false;
       return;
     }
   }

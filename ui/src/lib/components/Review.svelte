@@ -1,5 +1,7 @@
 <script lang="ts">
   import { appState } from "../appState.svelte";
+  import { filterState } from "../filterState.svelte";
+  import { viewState } from "../viewState.svelte";
   import { cameraLabel } from "../cameraLabel";
   import { i18n } from "../i18n.svelte";
   import { logger } from "../logger";
@@ -56,7 +58,7 @@
   });
 
   $effect(() => {
-    const targetUrl = appState.comparisonMode && appState.comparisonIndex !== -1 ? appState.getFullUrl(appState.comparisonIndex) : '';
+    const targetUrl = viewState.comparisonMode && appState.comparisonIndex !== -1 ? appState.getFullUrl(appState.comparisonIndex) : '';
     if (targetUrl) {
       const img = new Image();
       img.src = targetUrl;
@@ -80,7 +82,7 @@
   });
 
   $effect(() => {
-    const targetUrl = appState.comparisonMode && appState.currentIndex !== -1 ? appState.getFullUrl(appState.currentIndex) : '';
+    const targetUrl = viewState.comparisonMode && appState.currentIndex !== -1 ? appState.getFullUrl(appState.currentIndex) : '';
     if (targetUrl) {
       const img = new Image();
       img.src = targetUrl;
@@ -103,18 +105,18 @@
     }
   });
   let shortcutCtx = $derived(resolveShortcutContext({
-    view: appState.view,
-    gridOpen: appState.gridOpen,
-    filterBarOpen: appState.filterBarOpen,
-    comparisonMode: appState.comparisonMode,
-    filterMode: appState.filterMode as 'none' | 'starred' | 'label' | 'duplicates',
-    helpOpen: appState.helpOpen,
-    settingsOpen: appState.settingsOpen,
+    view: viewState.current,
+    gridOpen: viewState.gridOpen,
+    filterBarOpen: filterState.filterBarOpen,
+    comparisonMode: viewState.comparisonMode,
+    filterMode: filterState.filterMode as 'none' | 'starred' | 'label' | 'duplicates',
+    helpOpen: viewState.helpOpen,
+    settingsOpen: viewState.settingsOpen,
   }));
 </script>
 
-<div class="review-layout" class:zen={appState.zenMode} class:grid-mode={appState.gridOpen}>
-  {#if !appState.gridOpen && !appState.comparisonMode}
+<div class="review-layout" class:zen={viewState.zenMode} class:grid-mode={viewState.gridOpen}>
+  {#if !viewState.gridOpen && !viewState.comparisonMode}
     <Topbar />
 
     <button
@@ -136,30 +138,30 @@
     </button>
   {/if}
 
-  {#if !appState.gridOpen && appState.comparisonMode}
+  {#if !viewState.gridOpen && viewState.comparisonMode}
     <Topbar />
   {/if}
 
   <div class="main-container">
-    <Sidebar open={appState.sidebarOpen && !appState.zenMode} />
+    <Sidebar open={viewState.sidebarOpen && !viewState.zenMode} />
 
     <div
       class="viewer"
-      class:zoomed={appState.zoomed}
-      class:split={appState.comparisonMode}
+      class:zoomed={viewState.zoomed}
+      class:split={viewState.comparisonMode}
     >
-      {#if appState.gridOpen}
+      {#if viewState.gridOpen}
         <Grid />
       {/if}
 
-      {#if !appState.gridOpen}
+      {#if !viewState.gridOpen}
         {#if appState.loading}
           <div class="spinner"></div>
         {/if}
 
         <div class="action-flash" class:visible={appState.loading}></div>
 
-        {#if appState.comparisonMode && appState.stats && appState.stats.total > 1}
+        {#if viewState.comparisonMode && appState.stats && appState.stats.total > 1}
           {@const leftIdx = appState.comparisonIndex}
           {@const rightIdx = appState.currentIndex}
           
@@ -191,7 +193,7 @@
             class="main-pane" 
             class:selected={appState.selectedIndices.includes(rightIdx)}
             class:active-compare={true}
-            class:zoomed={appState.zoomed}
+            class:zoomed={viewState.zoomed}
             onclick={(e) => appState.select(rightIdx, e.ctrlKey || e.metaKey, e.shiftKey)}
             title={`${i18n.t('active')} - ${i18n.t('click_to_select_target')}`}
           >
@@ -199,7 +201,7 @@
               <div class="selection-badge">✓</div>
               <div class="target-pill">{i18n.t('target_desc')}</div>
             {/if}
-            <div class="img-zoom-wrapper" class:zoom-cursor={!appState.zoomed}>
+            <div class="img-zoom-wrapper" class:zoom-cursor={!viewState.zoomed}>
               <img
                 src={rightSrc}
                 alt="comparison-active"
@@ -214,7 +216,7 @@
         {:else}
           <button 
             class="main-pane" 
-            onclick={() => (appState.zoomed = !appState.zoomed)}
+            onclick={() => (viewState.zoomed = !viewState.zoomed)}
           >
             {#if appState.currentFile}
               {#if appState.currentFile.starred}
@@ -228,7 +230,7 @@
               {#if appState.currentFile.type === "image"}
                 <div
                   class="img-zoom-wrapper"
-                  class:zoom-cursor={!appState.zoomed}
+                  class:zoom-cursor={!viewState.zoomed}
                 >
                   <img
                     src={currentSrc}
@@ -252,8 +254,8 @@
           </button>
         {/if}
 
-        {#if appState.infoOpen && !appState.zenMode}
-          {#if appState.comparisonMode && appState.referenceFile && appState.currentFile}
+        {#if viewState.infoOpen && !viewState.zenMode}
+          {#if viewState.comparisonMode && appState.referenceFile && appState.currentFile}
             <div class="info-overlay comparison-info-left">
               {@render infoContent(appState.referenceFile, appState.currentFile)}
             </div>
@@ -283,7 +285,7 @@
     </div>
   </div>
 
-  {#if !appState.gridOpen && appState.filmstripOpen && !appState.zenMode}
+  {#if !viewState.gridOpen && viewState.filmstripOpen && !viewState.zenMode}
     <Filmstrip />
   {/if}
 
@@ -291,16 +293,16 @@
     <Bottombar />
   {/if}
 
-  {#if appState.zenMode}
+  {#if viewState.zenMode}
     <div class="zen-hint">{i18n.t('zen_hint')}</div>
   {/if}
   
 
-  {#if appState.settingsOpen}
+  {#if viewState.settingsOpen}
     <Settings />
   {/if}
 
-  {#if appState.helpOpen}
+  {#if viewState.helpOpen}
     <Help />
   {/if}
 

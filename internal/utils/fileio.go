@@ -9,15 +9,6 @@ import (
 	"time"
 )
 
-// FileExists checks if a file exists and is not a directory.
-func FileExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return !info.IsDir()
-}
-
 // RemoveFile attempts to delete a file robustly.
 // On Windows/WSL it handles the Read-Only flag and retries on locked files (NTFS).
 // On other platforms a single attempt is made.
@@ -42,22 +33,6 @@ func RemoveFile(path string) error {
 	}
 
 	return fmt.Errorf("could not delete %s after 10 attempts: %w", path, lastErr)
-}
-
-// AtomicWriteFile writes data to a temporary file and then renames it to the target path.
-// This ensures that the target file is either fully written or not touched at all.
-func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, perm); err != nil {
-		return err
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return err
-	}
-
-	return nil
 }
 
 // AtomicWriteFileDurable writes data atomically and adds durability guarantees.

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { appState } from "../appState.svelte";
+  import { filterState } from "../filterState.svelte";
+  import { viewState } from "../viewState.svelte";
   import { Virtualization } from "../virtualization.svelte";
   import PhotoBadge from "./PhotoBadge.svelte";
 
@@ -20,10 +22,10 @@
 
   let items = $derived.by(() => {
     if (
-      appState.filterMode !== "none" ||
-      Object.keys(appState.activeFilters).length > 0
+      filterState.filterMode !== "none" ||
+      Object.keys(filterState.activeFilters).length > 0
     ) {
-      return appState.filteredIndices;
+      return filterState.filteredIndices;
     }
     return fullItemsArray;
   });
@@ -68,7 +70,7 @@
         class="thumb"
         class:active={i === appState.currentIndex}
         class:is-reference={i === appState.comparisonIndex &&
-          appState.comparisonMode}
+          viewState.comparisonMode}
         class:burst={appState.currentFile?.index === i &&
           appState.currentFile?.burst}
         style="transform: translate3d({item.x}px, 0, 0);"
@@ -82,7 +84,7 @@
           isSelected={appState.selectedIndices.includes(i)}
           burstIndex={appState.currentFile?.index === i ? appState.currentFile?.burst?.index : 0}
           burstCount={appState.currentFile?.index === i ? appState.currentFile?.burst?.count : 0}
-          role={appState.comparisonMode ? (i === appState.comparisonIndex ? 'reference' : (i === appState.currentIndex ? 'active' : 'none')) : 'none'}
+          role={viewState.comparisonMode ? (i === appState.comparisonIndex ? 'reference' : (i === appState.currentIndex ? 'active' : 'none')) : 'none'}
         />
       </button>
     {/each}

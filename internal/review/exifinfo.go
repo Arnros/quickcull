@@ -167,54 +167,94 @@ func extractEXIFInfoWithImagemeta(absPath string, ft domain.FileType, info *EXIF
 		R:           f,
 		ImageFormat: format,
 		HandleTag: func(ti imagemeta.TagInfo) error {
-			tag := ti.Tag
-			switch tag {
-			case "Model":
-				if s, ok := ti.Value.(string); ok {
-					info.Camera = utils.LimitString(strings.TrimSpace(s), 128)
-				}
-			case "ISOSpeedRatings":
-				info.ISO = utils.LimitString(fmt.Sprintf("%v", ti.Value), 32)
-			case "FNumber":
-				if r, ok := ti.Value.(imagemeta.Rat[uint32]); ok && r.Den() != 0 {
-					info.Aperture = fmt.Sprintf("f/%.1f", float64(r.Num())/float64(r.Den()))
-				}
-			case "ExposureTime":
-				if r, ok := ti.Value.(imagemeta.Rat[uint32]); ok && r.Den() != 0 {
-					info.Shutter = formatShutter(float64(r.Num()), float64(r.Den()))
-				}
-			case "FocalLength":
-				if r, ok := ti.Value.(imagemeta.Rat[uint32]); ok && r.Den() != 0 {
-					info.Focal = fmt.Sprintf("%.0f mm", float64(r.Num())/float64(r.Den()))
-				}
-			case "PixelXDimension":
-				if v, ok := toInt(ti.Value); ok {
-					info.Width = v
-				}
-			case "PixelYDimension":
-				if v, ok := toInt(ti.Value); ok {
-					info.Height = v
-				}
-			case "ImageWidth":
-				if v, ok := toInt(ti.Value); ok && info.Width == 0 {
-					info.Width = v
-				}
-			case "ImageLength": // TIFF uses ImageLength for height
-				if v, ok := toInt(ti.Value); ok && info.Height == 0 {
-					info.Height = v
-				}
-			case "DateTimeOriginal":
-				if s, ok := ti.Value.(string); ok && info.Date == "" {
-					info.Date = normalizeDate(utils.LimitString(s, 64))
-				}
-			case "DateTime":
-				if s, ok := ti.Value.(string); ok && info.Date == "" {
-					info.Date = normalizeDate(utils.LimitString(s, 64))
-				}
-			}
+			handleImagemetaTag(info, ti)
 			return nil
 		},
 	})
+}
+
+type imagemetaTagHandler func(*EXIFInfo, imagemeta.TagInfo) bool
+
+var imagemetaTagHandlers = []imagemetaTagHandler{
+	handleImagemetaIdentityTag,
+	handleImagemetaExposureTag,
+	handleImagemetaDimensionTag,
+	handleImagemetaDateTag,
+}
+
+func handleImagemetaTag(info *EXIFInfo, tag imagemeta.TagInfo) {
+	for _, handler := range imagemetaTagHandlers {
+		if handler(info, tag) {
+			return
+		}
+	}
+}
+
+func handleImagemetaIdentityTag(info *EXIFInfo, tag imagemeta.TagInfo) bool {
+	switch tag.Tag {
+	case "Model":
+		if value, ok := tag.Value.(string); ok {
+			info.Camera = utils.LimitString(strings.TrimSpace(value), 128)
+		}
+	case "ISOSpeedRatings":
+		info.ISO = utils.LimitString(fmt.Sprintf("%v", tag.Value), 32)
+	default:
+		return false
+	}
+	return true
+}
+
+func handleImagemetaExposureTag(info *EXIFInfo, tag imagemeta.TagInfo) bool {
+	ratio, ok := tag.Value.(imagemeta.Rat[uint32])
+	if !ok || ratio.Den() == 0 {
+		return tag.Tag == "FNumber" || tag.Tag == "ExposureTime" || tag.Tag == "FocalLength"
+	}
+	switch tag.Tag {
+	case "FNumber":
+		info.Aperture = fmt.Sprintf("f/%.1f", float64(ratio.Num())/float64(ratio.Den()))
+	case "ExposureTime":
+		info.Shutter = formatShutter(float64(ratio.Num()), float64(ratio.Den()))
+	case "FocalLength":
+		info.Focal = fmt.Sprintf("%.0f mm", float64(ratio.Num())/float64(ratio.Den()))
+	default:
+		return false
+	}
+	return true
+}
+
+func handleImagemetaDimensionTag(info *EXIFInfo, tag imagemeta.TagInfo) bool {
+	value, ok := toInt(tag.Value)
+	switch tag.Tag {
+	case "PixelXDimension":
+		if ok {
+			info.Width = value
+		}
+	case "PixelYDimension":
+		if ok {
+			info.Height = value
+		}
+	case "ImageWidth":
+		if ok && info.Width == 0 {
+			info.Width = value
+		}
+	case "ImageLength":
+		if ok && info.Height == 0 {
+			info.Height = value
+		}
+	default:
+		return false
+	}
+	return true
+}
+
+func handleImagemetaDateTag(info *EXIFInfo, tag imagemeta.TagInfo) bool {
+	if tag.Tag != "DateTimeOriginal" && tag.Tag != "DateTime" {
+		return false
+	}
+	if value, ok := tag.Value.(string); ok && info.Date == "" {
+		info.Date = normalizeDate(utils.LimitString(value, 64))
+	}
+	return true
 }
 
 // normalizeDate converts EXIF date format "2024:11:15 14:30:00" to "2024-11-15 14:30:00".

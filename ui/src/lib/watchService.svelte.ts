@@ -1,5 +1,6 @@
 import { api } from './api';
 import { appState } from './appState.svelte';
+import { viewState } from './viewState.svelte';
 import { logger } from './logger';
 
 class WatchService {
@@ -21,7 +22,7 @@ class WatchService {
   }
 
   debugCurrentIntervalSeconds() {
-    const baseSeconds = Math.max(1, Number(appState.config?.autoRefreshSeconds || 5));
+    const baseSeconds = Math.max(1, Number(viewState.config?.autoRefreshSeconds || 5));
     return baseSeconds * this.debugBackoffFactor();
   }
 
@@ -37,7 +38,7 @@ class WatchService {
   private async tick() {
     if (!this.autoRefreshRunning) return;
 
-    const cfg = appState.config;
+    const cfg = viewState.config;
     const baseSeconds = Math.max(1, Number(cfg?.autoRefreshSeconds || 5));
     const backoffFactor = this.debugBackoffFactor();
     const seconds = baseSeconds * backoffFactor;
@@ -46,7 +47,7 @@ class WatchService {
     }, seconds * 1000);
 
     if (!cfg?.autoRefresh) return;
-    if (appState.view !== 'review') return;
+    if (viewState.current !== 'review') return;
     if (appState.loading || this.autoRefreshBusy) return;
 
     this.autoRefreshBusy = true;

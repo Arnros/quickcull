@@ -40,6 +40,25 @@ vi.mock('./appState.svelte', () => {
     };
 });
 
+vi.mock('./viewState.svelte', () => ({
+    viewState: {
+        current: 'review', config: { shortcuts: {} }, sidebarOpen: false, filmstripOpen: false,
+        infoOpen: false, gridOpen: false, settingsOpen: false, helpOpen: false,
+        zoomed: false, zenMode: false, comparisonMode: false,
+    }
+}));
+
+vi.mock('./filterState.svelte', () => ({
+    filterState: {
+        filterBarOpen: false, filterMode: 'none', activeLabelFilter: 0,
+        duplicateGroups: [], filteredIndices: [], filters: { cameras: [], isos: [] },
+        activeFilters: {},
+    }
+}));
+
+import { filterState } from './filterState.svelte';
+import { viewState } from './viewState.svelte';
+
 // Since Svelte 5 $derived doesn't work well in raw vi.mocked modules without a runtime,
 // we manually override the currentContext getter for tests that need specific screens.
 const setContext = (screen: string) => {
@@ -62,21 +81,29 @@ describe('ShortcutService', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
-        appState.zoomed = false;
-        appState.view = 'review';
+		(appState.exitDuplicatesMode as any).mockImplementation(() => {
+			viewState.comparisonMode = false;
+			appState.referenceFile = null;
+			filterState.filterMode = 'none' as any;
+			filterState.filteredIndices = [];
+			filterState.duplicateGroups = [];
+			viewState.gridOpen = false;
+		});
+        viewState.zoomed = false;
+        viewState.current = 'review';
         appState.selectedIndices = [0];
         setContext('review');
 
         // Reset properties used in escape handler
-        appState.gridOpen = false;
-        appState.comparisonMode = false;
-        appState.filterMode = 'none';
-        appState.duplicateGroups = [];
-        appState.filteredIndices = [];
+        viewState.gridOpen = false;
+        viewState.comparisonMode = false;
+        filterState.filterMode = 'none';
+        filterState.duplicateGroups = [];
+        filterState.filteredIndices = [];
         appState.referenceFile = null;
         appState.comparisonIndex = 1;
-        appState.zenMode = false;
-        appState.filterBarOpen = false;
+        viewState.zenMode = false;
+        filterState.filterBarOpen = false;
         shortcutService.lastTriggeredAction = null;
         shortcutService.lastTriggeredAt = 0;
     });
@@ -145,12 +172,12 @@ describe('ShortcutService', () => {
         });
 
         it('should toggle gridOpen on V', () => {
-            const initial = appState.gridOpen;
+            const initial = viewState.gridOpen;
             simulateKeydown('v');
-            expect(appState.gridOpen).toBe(!initial);
+            expect(viewState.gridOpen).toBe(!initial);
 
             simulateKeydown('v');
-            expect(appState.gridOpen).toBe(initial);
+            expect(viewState.gridOpen).toBe(initial);
         });
 
         it('should expose the last triggered shortcut action', () => {
@@ -194,38 +221,38 @@ describe('ShortcutService', () => {
         });
 
         it('should handle Escape key properly to unzoom or close grids', () => {
-            appState.zoomed = true;
+            viewState.zoomed = true;
             simulateKeydown('Escape');
-            expect(appState.zoomed).toBe(false);
+            expect(viewState.zoomed).toBe(false);
 
-            appState.gridOpen = true;
+            viewState.gridOpen = true;
             setContext('review_grid');
             simulateKeydown('Escape');
-            expect(appState.gridOpen).toBe(false);
+            expect(viewState.gridOpen).toBe(false);
         });
 
         it('should exit duplicate comparison mode completely on Escape', () => {
-            appState.comparisonMode = true;
-            appState.filterMode = 'duplicates';
+            viewState.comparisonMode = true;
+            filterState.filterMode = 'duplicates';
             setContext('review_duplicate_comparison');
             appState.referenceFile = { filename: 'ref.jpg' } as any;
-            appState.filteredIndices = [1, 2];
-            appState.duplicateGroups = [[1, 2]];
+            filterState.filteredIndices = [1, 2];
+            filterState.duplicateGroups = [[1, 2]];
 
             simulateKeydown('Escape');
 
-            expect(appState.comparisonMode).toBe(false);
-            expect(appState.filterMode).toBe('none');
+            expect(viewState.comparisonMode).toBe(false);
+            expect(filterState.filterMode).toBe('none');
             expect(appState.referenceFile).toBeNull();
-            expect(appState.filteredIndices).toEqual([]);
-            expect(appState.duplicateGroups).toEqual([]);
+            expect(filterState.filteredIndices).toEqual([]);
+            expect(filterState.duplicateGroups).toEqual([]);
             expect(appState.exitDuplicatesMode).toHaveBeenCalledTimes(1);
         });
 
         it('should select left/right photo in duplicates comparison mode', () => {
-            appState.comparisonMode = true;
-            appState.filterMode = 'duplicates';
-            appState.gridOpen = false;
+            viewState.comparisonMode = true;
+            filterState.filterMode = 'duplicates';
+            viewState.gridOpen = false;
             setContext('review_duplicate_comparison');
             appState.comparisonIndex = 4;
             appState.currentIndex = 7;
@@ -240,9 +267,9 @@ describe('ShortcutService', () => {
         });
 
         it('should keep up/down for previous/next couple in duplicates comparison mode', () => {
-            appState.comparisonMode = true;
-            appState.filterMode = 'duplicates';
-            appState.gridOpen = false;
+            viewState.comparisonMode = true;
+            filterState.filterMode = 'duplicates';
+            viewState.gridOpen = false;
             setContext('review_duplicate_comparison');
 
             simulateKeydown('ArrowUp');

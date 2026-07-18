@@ -1,5 +1,7 @@
 <script lang="ts">
   import { appState } from "../appState.svelte";
+  import { filterState } from "../filterState.svelte";
+  import { viewState } from "../viewState.svelte";
   import { i18n } from "../i18n.svelte";
   import Logo from "./Logo.svelte";
   import Icon from "./Icon.svelte";
@@ -13,17 +15,17 @@
   let sizeMinInput = $state("");
   let sizeMaxInput = $state("");
 
-  let hasCustomFilters = $derived(Object.keys(appState.activeFilters || {}).length > 0);
+  let hasCustomFilters = $derived(Object.keys(filterState.activeFilters || {}).length > 0);
   let contextHints = $derived(resolveContextShortcutHints({
-    view: appState.view,
-    filterBarOpen: appState.filterBarOpen,
+    view: viewState.current,
+    filterBarOpen: filterState.filterBarOpen,
   }));
 
   $effect(() => {
-    dateFromInput = appState.activeFilters?.dateFrom || "";
-    dateToInput = appState.activeFilters?.dateTo || "";
-    sizeMinInput = appState.activeFilters?.sizeMin || "";
-    sizeMaxInput = appState.activeFilters?.sizeMax || "";
+    dateFromInput = filterState.activeFilters?.dateFrom || "";
+    dateToInput = filterState.activeFilters?.dateTo || "";
+    sizeMinInput = filterState.activeFilters?.sizeMin || "";
+    sizeMaxInput = filterState.activeFilters?.sizeMax || "";
   });
 
   function clearAllFilters() {
@@ -43,7 +45,7 @@
         variant="ghost"
         icon="folder"
         class="tooltip-bottom"
-        onclick={() => (appState.view = "picker")}
+        onclick={() => (viewState.current = "picker")}
         title={i18n.t("open_another")}
       >
         {i18n.t("folder")}
@@ -91,7 +93,7 @@
     </div>
 
     <div class="right">
-      <Button variant="ghost" icon="eye" class="tooltip-bottom" onclick={() => (appState.zenMode = !appState.zenMode)} title={`${i18n.t("zen")} (H)`} ariaLabel={i18n.t("zen")} />
+      <Button variant="ghost" icon="eye" class="tooltip-bottom" onclick={() => (viewState.zenMode = !viewState.zenMode)} title={`${i18n.t("zen")} (H)`} ariaLabel={i18n.t("zen")} />
       <Button variant="ghost" icon="refresh" class="tooltip-bottom" onclick={() => appState.refresh()} title={`${i18n.t("refresh")} (F5)`} ariaLabel={i18n.t("refresh")} />
       <Button 
         variant="ghost" 
@@ -101,31 +103,31 @@
         title={`${i18n.t("sort")} (${appState.sortOrder === 'name' ? 'Date' : 'Name'})`} 
         ariaLabel={i18n.t("sort")}
       />
-      <Button variant="ghost" icon={appState.config?.theme === "light" ? "moon" : "sun"} class="tooltip-bottom" onclick={() => appState.toggleTheme()} title={i18n.t('toggle_theme')} ariaLabel={i18n.t('toggle_theme_desc')} />
-      <Button variant="ghost" icon="settings" class="tooltip-bottom" onclick={() => (appState.settingsOpen = !appState.settingsOpen)} title={i18n.t("settings")} />
-      <Button variant="ghost" icon="help" class="tooltip-bottom" onclick={() => (appState.helpOpen = !appState.helpOpen)} title={`${i18n.t("help")} (?)`} />
+      <Button variant="ghost" icon={viewState.config?.theme === "light" ? "moon" : "sun"} class="tooltip-bottom" onclick={() => appState.toggleTheme()} title={i18n.t('toggle_theme')} ariaLabel={i18n.t('toggle_theme_desc')} />
+      <Button variant="ghost" icon="settings" class="tooltip-bottom" onclick={() => (viewState.settingsOpen = !viewState.settingsOpen)} title={i18n.t("settings")} />
+      <Button variant="ghost" icon="help" class="tooltip-bottom" onclick={() => (viewState.helpOpen = !viewState.helpOpen)} title={`${i18n.t("help")} (?)`} />
     </div>
   </div>
 
   <div class="row row-tools">
     <div class="left tools-wrap">
-      <Button variant="secondary" icon="folder" class="tooltip-bottom" active={appState.sidebarOpen} onclick={() => (appState.sidebarOpen = !appState.sidebarOpen)}>
+      <Button variant="secondary" icon="folder" class="tooltip-bottom" active={viewState.sidebarOpen} onclick={() => (viewState.sidebarOpen = !viewState.sidebarOpen)}>
         <Kbd key="Tab" variant="outline" />
         {i18n.t("folders")}
       </Button>
-      <Button variant="secondary" icon="film" class="tooltip-bottom" active={appState.filmstripOpen} onclick={() => (appState.filmstripOpen = !appState.filmstripOpen)}>
+      <Button variant="secondary" icon="film" class="tooltip-bottom" active={viewState.filmstripOpen} onclick={() => (viewState.filmstripOpen = !viewState.filmstripOpen)}>
         <Kbd key="G" variant="outline" />
         {i18n.t("filmstrip")}
       </Button>
-      <Button variant="secondary" icon="grid" class="tooltip-bottom" active={appState.gridOpen} onclick={() => (appState.gridOpen = !appState.gridOpen)}>
+      <Button variant="secondary" icon="grid" class="tooltip-bottom" active={viewState.gridOpen} onclick={() => (viewState.gridOpen = !viewState.gridOpen)}>
         <Kbd key="V" variant="outline" />
         {i18n.t("grid")}
       </Button>
-      <Button variant="secondary" icon="info" class="tooltip-bottom" active={appState.infoOpen} onclick={() => (appState.infoOpen = !appState.infoOpen)}>
+      <Button variant="secondary" icon="info" class="tooltip-bottom" active={viewState.infoOpen} onclick={() => (viewState.infoOpen = !viewState.infoOpen)}>
         <Kbd key="I" variant="outline" />
         {i18n.t("info")}
       </Button>
-      <Button variant="secondary" icon="compare" class="tooltip-bottom" active={appState.comparisonMode} onclick={() => appState.toggleComparisonMode()} title={`${i18n.t("comparison")} (C)`}>
+      <Button variant="secondary" icon="compare" class="tooltip-bottom" active={viewState.comparisonMode} onclick={() => appState.toggleComparisonMode()} title={`${i18n.t("comparison")} (C)`}>
         <Kbd key="C" variant="outline" />
         {i18n.t("comparison")}
       </Button>
@@ -133,7 +135,7 @@
         variant="secondary"
         icon="compare"
         class="tooltip-bottom"
-        active={appState.filterMode === "duplicates"}
+        active={filterState.filterMode === "duplicates"}
         onclick={() => appState.toggleDuplicatesFilter()}
         title={i18n.t("show_duplicates")}
       >
@@ -142,11 +144,11 @@
       <Button
         variant="ghost"
         icon="filter"
-        active={appState.filterBarOpen}
-        class="tooltip-bottom {appState.filterMode !== 'none' || hasCustomFilters ? 'filter-active' : ''}"
+        active={filterState.filterBarOpen}
+        class="tooltip-bottom {filterState.filterMode !== 'none' || hasCustomFilters ? 'filter-active' : ''}"
         onclick={() => {
-          appState.filterBarOpen = !appState.filterBarOpen;
-          if (appState.filterBarOpen) {
+          filterState.filterBarOpen = !filterState.filterBarOpen;
+          if (filterState.filterBarOpen) {
             appState.loadFilters();
           }
         }}
@@ -154,7 +156,7 @@
       >
         <Kbd key="F" variant="outline" />
         {i18n.t("filters")}
-        {#if appState.filterMode !== "none" || hasCustomFilters}
+        {#if filterState.filterMode !== "none" || hasCustomFilters}
           <span class="active-dot"></span>
         {/if}
       </Button>
@@ -191,7 +193,7 @@
   </div>
 </div>
 
-{#if appState.filterBarOpen}
+{#if filterState.filterBarOpen}
   <div class="filter-panel">
     <div class="filter-section">
       <div class="filter-label">{i18n.t("filters")}:</div>
@@ -199,7 +201,7 @@
         <Button 
           variant="mini" 
           icon="star" 
-          active={appState.filterMode === "starred"} 
+          active={filterState.filterMode === "starred"}
           onclick={() => appState.toggleStarFilter()}
         >
           <Kbd key="S" variant="outline" />
@@ -212,7 +214,7 @@
           <Button
             variant="mini"
             class="label-{i}"
-            active={appState.filterMode === "label" && appState.activeLabelFilter === i}
+            active={filterState.filterMode === "label" && filterState.activeLabelFilter === i}
             onclick={() => appState.setLabelFilter(i)}
           >
             <Kbd key={i.toString()} variant="outline" />
@@ -222,20 +224,20 @@
 
         <Button 
           variant="mini" 
-          active={appState.filterMode === "label" && appState.activeLabelFilter === 0} 
+          active={filterState.filterMode === "label" && filterState.activeLabelFilter === 0}
           onclick={() => appState.setLabelFilter(0)} 
           title={i18n.t("labeled")}
         >
           <Kbd key="0" variant="outline" /> {i18n.t("labeled")}
         </Button>
 
-      {#if appState.filterMode !== 'none'}
+      {#if filterState.filterMode !== 'none'}
         <div class="v-divider"></div>
         <Button
             variant="mini"
             icon="export"
             disabled={appState.isExporting}
-            onclick={() => appState.exportSelection(appState.filterMode as any, appState.activeLabelFilter)}
+            onclick={() => appState.exportSelection(filterState.filterMode as any, filterState.activeLabelFilter)}
             title={i18n.t("export_selection")}
           >
             {i18n.t("export_selection")}

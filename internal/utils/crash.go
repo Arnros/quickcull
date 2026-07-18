@@ -57,7 +57,6 @@ func (s *panicSink) WriteString(content string) {
 
 var (
 	crashSink   atomic.Pointer[panicSink]
-	crashExit   = os.Exit
 	crashNotify = notifyCrashPlatform
 )
 
@@ -87,15 +86,6 @@ func reportPanic(r any) {
 func HandlePanic() {
 	if r := recover(); r != nil {
 		reportPanic(r)
-	}
-}
-
-// HandlePanicFatal captures a panic, logs it, and terminates the process.
-// Use only for truly unrecoverable scenarios (init-time failures, main goroutine).
-func HandlePanicFatal() {
-	if r := recover(); r != nil {
-		reportPanic(r)
-		crashExit(1)
 	}
 }
 

@@ -59,36 +59,14 @@ class AppState {
    */
   v2 = $state<AppStateV2 | null>(null);
 
-  get view() { return viewState.current; }
-  set view(v) { viewState.current = v; }
-  get config() { return viewState.config; }
-  set config(v) { viewState.config = v; }
-  get sidebarOpen() { return viewState.sidebarOpen; }
-  set sidebarOpen(v) { viewState.sidebarOpen = v; }
-  get filmstripOpen() { return viewState.filmstripOpen; }
-  set filmstripOpen(v) { viewState.filmstripOpen = v; }
-  get infoOpen() { return viewState.infoOpen; }
-  set infoOpen(v) { viewState.infoOpen = v; }
-  get gridOpen() { return viewState.gridOpen; }
-  set gridOpen(v) { viewState.gridOpen = v; }
-  get settingsOpen() { return viewState.settingsOpen; }
-  set settingsOpen(v) { viewState.settingsOpen = v; }
-  get helpOpen() { return viewState.helpOpen; }
-  set helpOpen(v) { viewState.helpOpen = v; }
-  get zoomed() { return viewState.zoomed; }
-  set zoomed(v) { viewState.zoomed = v; }
-  get zenMode() { return viewState.zenMode; }
-  set zenMode(v) { viewState.zenMode = v; }
-  get comparisonMode() { return viewState.comparisonMode; }
-  set comparisonMode(v) { viewState.comparisonMode = v; }
-  get autoAdvance() { return this.config?.autoAdvance ?? false; }
+  get autoAdvance() { return viewState.config?.autoAdvance ?? false; }
   get maxLabel() { return this.stats?.maxLabel || DEFAULT_MAX_LABEL; }
 
   async toggleAutoAdvance(): Promise<void> {
-    if (!this.config) return;
-    const newConfig = { ...this.config, autoAdvance: !this.config.autoAdvance };
+    if (!viewState.config) return;
+    const newConfig = { ...viewState.config, autoAdvance: !viewState.config.autoAdvance };
     await api.updateConfig(newConfig);
-    this.config = newConfig;
+    viewState.config = newConfig;
   }
 
   get currentIndex() { return navigationService.currentIndex; }
@@ -113,20 +91,37 @@ class AppState {
     return { index, path };
   }
 
-  get filterBarOpen() { return filterState.filterBarOpen; }
-  set filterBarOpen(v) { filterState.filterBarOpen = v; }
-  get filterMode() { return filterState.filterMode; }
-  set filterMode(v) { filterState.filterMode = v; }
-  get activeLabelFilter() { return filterState.activeLabelFilter; }
-  set activeLabelFilter(v) { filterState.activeLabelFilter = v; }
-  get duplicateGroups() { return filterState.duplicateGroups; }
-  set duplicateGroups(v) { filterState.duplicateGroups = v; }
-  get filteredIndices() { return filterState.filteredIndices; }
-  set filteredIndices(v) { filterState.filteredIndices = v; }
-  get filters() { return filterState.filters; }
-  set filters(v) { filterState.filters = v; }
-  get activeFilters() { return filterState.activeFilters; }
-  set activeFilters(v) { filterState.activeFilters = v; }
+  private filterContext() {
+    const owner = this;
+    return {
+      get filterMode() { return filterState.filterMode; },
+      set filterMode(value) { filterState.filterMode = value; },
+      get activeFilters() { return filterState.activeFilters; },
+      set activeFilters(value) { filterState.activeFilters = value; },
+      get activeLabelFilter() { return filterState.activeLabelFilter; },
+      set activeLabelFilter(value) { filterState.activeLabelFilter = value; },
+      get duplicateGroups() { return filterState.duplicateGroups; },
+      set duplicateGroups(value) { filterState.duplicateGroups = value; },
+      get filteredIndices() { return filterState.filteredIndices; },
+      set filteredIndices(value) { filterState.filteredIndices = value; },
+      get gridOpen() { return viewState.gridOpen; },
+      set gridOpen(value) { viewState.gridOpen = value; },
+      get currentIndex() { return navigationService.currentIndex; },
+      updateFilteredIndices: () => owner.updateFilteredIndices(),
+      loadFile: (index: number, manual?: boolean) => owner.loadFile(index, manual),
+    };
+  }
+
+  private tournamentContext() {
+    const owner = this;
+    return {
+      get comparisonMode() { return viewState.comparisonMode; },
+      get comparisonIndex() { return navigationService.comparisonIndex; },
+      set comparisonIndex(value: number) { navigationService.comparisonIndex = value; },
+      get autoAdvance() { return owner.autoAdvance; },
+      next: () => owner.next(),
+    };
+  }
 
   // Legacy stats (will be gradually replaced by v2 properties)
   stats = $state<review.AppStats>({
@@ -292,7 +287,7 @@ class AppState {
     viewState.gridScrollTop = 0;
     viewState.gridScrollLeft = 0;
     try {
-      this.config = await api.getConfig();
+      viewState.config = await api.getConfig();
       await this.refreshRuntimeCapabilities();
       const s = await api.getStats();
       if (s) this.stats = s;
@@ -305,9 +300,9 @@ class AppState {
       }
 
       const hasPhotos = this.stats.total > 0 || (this.v2?.VisibleOrder?.length || 0) > 0;
-      if (hasPhotos && this.view === 'picker') {
+      if (hasPhotos && viewState.current === 'picker') {
         logger.info('Photos detected (stats or v2), switching to review');
-        this.view = 'review';
+        viewState.current = 'review';
         const targetPos = this.stats.savedPosition || 0;
         await navigationService.loadFile(targetPos);
         // Load auxiliary data in parallel after initial file is visible
@@ -337,8 +332,8 @@ class AppState {
   async updateFilteredIndices(): Promise<void> {
     await filterState.updateFilteredIndices();
     // Security: purge selection of indices that are no longer visible after filter change
-    if (this.filterMode !== 'none' || Object.keys(this.activeFilters).length > 0) {
-      const visibleSet = new Set(this.filteredIndices);
+    if (filterState.filterMode !== 'none' || Object.keys(filterState.activeFilters).length > 0) {
+      const visibleSet = new Set(filterState.filteredIndices);
       const prevCount = this.selectedIndices.length;
       this.selectedIndices = this.selectedIndices.filter(idx => visibleSet.has(idx));
       if (this.selectedIndices.length !== prevCount) {
@@ -350,39 +345,39 @@ class AppState {
   }
   async setFilter(type: 'camera' | 'iso', value: string): Promise<void> {
     await filterState.setFilter(type, value);
-    await focusFirstFilteredIfNeeded(this);
+    await focusFirstFilteredIfNeeded(this.filterContext());
   }
   async setAdvancedFilter(type: 'dateFrom' | 'dateTo' | 'sizeMin' | 'sizeMax', value: string): Promise<void> {
     await filterState.setAdvancedFilter(type, value);
-    if (this.filteredIndices.length > 0 && !this.filteredIndices.includes(this.currentIndex)) {
-      await this.loadFile(this.filteredIndices[0]);
+    if (filterState.filteredIndices.length > 0 && !filterState.filteredIndices.includes(this.currentIndex)) {
+      await this.loadFile(filterState.filteredIndices[0]);
     }
   }
   async clearFilters(): Promise<void> { await filterState.clearFilters(); }
 
   clearAllFilters(): void {
-    this.filterMode = 'none';
-    this.duplicateGroups = [];
-    this.filteredIndices = [];
+    filterState.filterMode = 'none';
+    filterState.duplicateGroups = [];
+    filterState.filteredIndices = [];
     void this.clearFilters();
   }
 
   exitDuplicatesMode(options?: { keepGrid?: boolean }): void {
     const keepGrid = options?.keepGrid ?? false;
-    if (this.comparisonMode) {
-      this.comparisonMode = false;
+    if (viewState.comparisonMode) {
+      viewState.comparisonMode = false;
       this.referenceFile = null;
     }
-    this.filterMode = 'none';
-    this.filteredIndices = [];
-    this.duplicateGroups = [];
-    this.gridOpen = keepGrid;
+    filterState.filterMode = 'none';
+    filterState.filteredIndices = [];
+    filterState.duplicateGroups = [];
+    viewState.gridOpen = keepGrid;
   }
 
   toggleTheme(): void { viewState.toggleTheme(); }
 
   async toggleComparisonMode(): Promise<void> {
-    const turningOn = !this.comparisonMode;
+    const turningOn = !viewState.comparisonMode;
     if (turningOn && this.stats.total > 1) {
       // Current becomes reference, next becomes active
       const ref = this.currentIndex;
@@ -390,24 +385,24 @@ class AppState {
       if (active >= this.stats.total) active = this.currentIndex - 1;
       
       this.comparisonIndex = ref;
-      this.comparisonMode = true; // Set mode BEFORE loadFile
+      viewState.comparisonMode = true; // Set mode BEFORE loadFile
       await this.loadFile(active, true);
     } else {
-      this.comparisonMode = false;
+      viewState.comparisonMode = false;
       this.referenceFile = null;
     }
   }
 
   async toggleDuplicatesFilter(): Promise<void> {
-    logger.info('Toggling duplicates filter', { active: this.filterMode !== 'duplicates' });
-    if (this.filterMode === 'duplicates') {
-      this.exitDuplicatesMode({ keepGrid: this.gridOpen && !this.comparisonMode });
+    logger.info('Toggling duplicates filter', { active: filterState.filterMode !== 'duplicates' });
+    if (filterState.filterMode === 'duplicates') {
+      this.exitDuplicatesMode({ keepGrid: viewState.gridOpen && !viewState.comparisonMode });
     } else {
       this.loading = true;
       try {
-        await setFilterMode(this, 'duplicates');
+        await setFilterMode(this.filterContext(), 'duplicates');
         if (this.stats.total > 1) {
-          this.comparisonMode = true; // Explicit side-effect here, better than in loadFile
+          viewState.comparisonMode = true; // Explicit side-effect here, better than in loadFile
         }
       } finally {
         this.loading = false;
@@ -417,23 +412,23 @@ class AppState {
 
   async toggleStarFilter(): Promise<void> {
     logger.info('Toggling star filter');
-    if (this.filterMode === 'starred') {
-      await setFilterMode(this, 'none', undefined, {
-        keepGridOnNone: this.gridOpen && !this.comparisonMode,
+    if (filterState.filterMode === 'starred') {
+      await setFilterMode(this.filterContext(), 'none', undefined, {
+        keepGridOnNone: viewState.gridOpen && !viewState.comparisonMode,
       });
     } else {
-      await setFilterMode(this, 'starred');
+      await setFilterMode(this.filterContext(), 'starred');
     }
   }
 
   async setLabelFilter(label: number): Promise<void> {
     logger.info('Setting label filter', { label });
-    if (this.filterMode === 'label' && this.activeLabelFilter === label) {
-      await setFilterMode(this, 'none', undefined, {
-        keepGridOnNone: this.gridOpen && !this.comparisonMode,
+    if (filterState.filterMode === 'label' && filterState.activeLabelFilter === label) {
+      await setFilterMode(this.filterContext(), 'none', undefined, {
+        keepGridOnNone: viewState.gridOpen && !viewState.comparisonMode,
       });
     } else {
-      await setFilterMode(this, 'label', label);
+      await setFilterMode(this.filterContext(), 'label', label);
     }
   }
 
@@ -539,7 +534,7 @@ class AppState {
       },
       async (t) => {
         const res = await api.toggleStar(t.index, t.path, undefined, !isCurrentlyStarred);
-        if (res) await handleTournamentProgress(this, t.index, !isCurrentlyStarred);
+        if (res) await handleTournamentProgress(this.tournamentContext(), t.index, !isCurrentlyStarred);
         return res;
       }
     );
@@ -571,13 +566,13 @@ class AppState {
         const res = await api.setLabel(t.index, t.path, undefined, finalLabel);
         if (res) {
           this.applyLabelSnapshot([t.path], finalLabel);
-          await handleTournamentProgress(this, t.index, finalLabel > 0);
+          await handleTournamentProgress(this.tournamentContext(), t.index, finalLabel > 0);
         }
         return res;
       }
     );
 
-    if (this.filterMode === 'label') await this.updateFilteredIndices();
+    if (filterState.filterMode === 'label') await this.updateFilteredIndices();
     this.lastNonUndoableAction = '';
   }
 
@@ -602,7 +597,7 @@ class AppState {
     logger.warn('RESET APP CACHE TRIGGERED');
     await this.runAction(async () => {
       await api.resetAppCache();
-      this.view = 'picker';
+      viewState.current = 'picker';
       // Wait for UI state to settle before full reload
       setTimeout(() => {
         window.location.reload();
@@ -614,7 +609,7 @@ class AppState {
     // Structural changes (Trash/Undo) trigger a SyncState (IsPartial=true) from backend.
     // Reactive $derived properties handle the rest.
     this.validateSelection();
-    await refreshAfterStateMutation(this, targetIndex, options);
+    await refreshAfterStateMutation(this.filterContext(), targetIndex, options);
   }
 
   async trash(): Promise<void> {
@@ -729,7 +724,7 @@ class AppState {
     const removed = new Set(paths);
     const oldOrder = this.v2.VisibleOrder;
     const currentPath = this.currentFile?.filename;
-    const filteredPaths = this.filteredIndices
+    const filteredPaths = filterState.filteredIndices
       .map((index) => oldOrder[index])
       .filter((path): path is string => Boolean(path) && !removed.has(path));
     const visibleOrder = oldOrder.filter((path) => !removed.has(path));
@@ -741,7 +736,7 @@ class AppState {
     );
 
     this.v2 = { ...this.v2, VisibleOrder: visibleOrder, Photos: photos };
-    this.filteredIndices = filteredPaths
+    filterState.filteredIndices = filteredPaths
       .map((path) => visibleOrder.indexOf(path))
       .filter((index) => index >= 0);
     if (currentPath && removed.has(currentPath)) {
@@ -764,8 +759,8 @@ class AppState {
   }
 
   selectAll(): void {
-    if (this.filterMode !== 'none' || Object.keys(this.activeFilters).length > 0) {
-      this.selectedIndices = [...this.filteredIndices];
+    if (filterState.filterMode !== 'none' || Object.keys(filterState.activeFilters).length > 0) {
+      this.selectedIndices = [...filterState.filteredIndices];
     } else {
       const total = this.v2?.VisibleOrder?.length || 0;
       this.selectedIndices = Array.from({ length: total }, (_, i) => i);
@@ -860,8 +855,8 @@ class AppState {
     const done = Number(data?.total || this.analysis.total || 0);
     this.queueAnalysisUpdate(done, done, true, 'analysis:complete');
     this.loadFilters();
-    if (this.filterMode === 'duplicates') {
-      this.duplicateGroups = [];
+    if (filterState.filterMode === 'duplicates') {
+      filterState.duplicateGroups = [];
       this.loadDuplicates();
     }
   }
@@ -899,7 +894,7 @@ class AppState {
   }
 
   onDuplicatesFound(data: { count: number }): void {
-    if (this.filterMode === 'duplicates') {
+    if (filterState.filterMode === 'duplicates') {
       this.loadDuplicates();
     }
   }
@@ -946,9 +941,9 @@ class AppState {
       this.stats = data.stats;
 
       // Auto-transition to review if photos appear while on picker
-      if (this.stats.total > 0 && this.view === "picker") {
+      if (this.stats.total > 0 && viewState.current === "picker") {
         logger.info("Photos detected via state update, switching to review");
-        this.view = "review";
+        viewState.current = "review";
         void navigationService.loadFile(this.stats.savedPosition || 0);
         
         // CRITICAL: Ensure side data is loaded during auto-transition
@@ -968,7 +963,7 @@ class AppState {
   private ensureProgressPolling(): void {
     if (this.progressPollTimer) return;
     this.progressPollTimer = setInterval(async () => {
-      if (this.view !== 'review') return;
+      if (viewState.current !== 'review') return;
       if (Date.now() - this.lastStateUpdateAt < POLL_STALENESS_THRESHOLD_MS) return;
       try {
         this.perf.pollRequests += 1;

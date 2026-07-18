@@ -1,6 +1,8 @@
 <script lang="ts">
     import { onDestroy } from "svelte";
     import { appState } from "../appState.svelte";
+    import { filterState } from "../filterState.svelte";
+    import { viewState } from "../viewState.svelte";
     import { i18n } from "../i18n.svelte";
     import { resolveShortcutContext } from "../shortcutContext";
     import { shortcutService, type ShortcutActionId } from "../shortcutService.svelte";
@@ -8,13 +10,13 @@
     import Kbd from "./Kbd.svelte";
 
     let shortcutCtx = $derived(resolveShortcutContext({
-        view: appState.view,
-        gridOpen: appState.gridOpen,
-        filterBarOpen: appState.filterBarOpen,
-        comparisonMode: appState.comparisonMode,
-        filterMode: appState.filterMode as 'none' | 'starred' | 'label' | 'duplicates',
-        helpOpen: appState.helpOpen,
-        settingsOpen: appState.settingsOpen,
+        view: viewState.current,
+        gridOpen: viewState.gridOpen,
+        filterBarOpen: filterState.filterBarOpen,
+        comparisonMode: viewState.comparisonMode,
+        filterMode: filterState.filterMode as 'none' | 'starred' | 'label' | 'duplicates',
+        helpOpen: viewState.helpOpen,
+        settingsOpen: viewState.settingsOpen,
     }));
     let prevTitleKey = $derived(shortcutCtx.navPrevKey);
     let nextTitleKey = $derived(shortcutCtx.navNextKey);
@@ -92,7 +94,7 @@
             </div>
         {/if}
 
-        {#if appState.config?.debug}
+        {#if viewState.config?.debug}
         <div class="perf-status" title={i18n.t('perf_metrics')}>
             <span>evt p:{appState.perf.progressEvents} s:{appState.perf.stateEvents} c:{appState.perf.completeEvents}</span>
             <span>poll:{appState.perf.pollRequests}</span>

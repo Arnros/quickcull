@@ -1,9 +1,145 @@
 package review
 
 import (
-	"testing"
 	"quickcull/internal/bus"
+	"testing"
 )
+
+func TestApplyUndoCharacterizationSingleEvents(t *testing.T) {
+	tests := []struct {
+		name       string
+		photo      Photo
+		event      bus.Event
+		counts     [4]int
+		wantPhoto  Photo
+		wantCounts [4]int
+	}{
+		{
+			name:       "star true to false does not make count negative",
+			photo:      Photo{ID: "p.jpg", IsStarred: true},
+			event:      bus.Event{Type: bus.TypeCommandToggleStar, Payload: bus.CommandToggleStarPayload{PhotoID: "p.jpg", OldStarred: false}},
+			wantPhoto:  Photo{ID: "p.jpg"},
+			wantCounts: [4]int{},
+		},
+		{
+			name:       "star false to true increments count",
+			photo:      Photo{ID: "p.jpg"},
+			event:      bus.Event{Type: bus.TypeCommandToggleStar, Payload: bus.CommandToggleStarPayload{PhotoID: "p.jpg", OldStarred: true}},
+			wantPhoto:  Photo{ID: "p.jpg", IsStarred: true},
+			wantCounts: [4]int{1, 0, 0, 0},
+		},
+		{
+			name:       "label set to none decrements count",
+			photo:      Photo{ID: "p.jpg", Label: 4},
+			event:      bus.Event{Type: bus.TypeCommandLabelPhoto, Payload: bus.CommandLabelPhotoPayload{PhotoID: "p.jpg", OldLabel: 0}},
+			counts:     [4]int{0, 1, 0, 0},
+			wantPhoto:  Photo{ID: "p.jpg"},
+			wantCounts: [4]int{},
+		},
+		{
+			name:       "label none to set increments count",
+			photo:      Photo{ID: "p.jpg"},
+			event:      bus.Event{Type: bus.TypeCommandLabelPhoto, Payload: bus.CommandLabelPhotoPayload{PhotoID: "p.jpg", OldLabel: 2}},
+			wantPhoto:  Photo{ID: "p.jpg", Label: 2},
+			wantCounts: [4]int{0, 1, 0, 0},
+		},
+		{
+			name:       "trash true to false decrements count",
+			photo:      Photo{ID: "p.jpg", IsTrashed: true},
+			event:      bus.Event{Type: bus.TypeCommandTrashPhoto, Payload: bus.CommandTrashPhotoPayload{PhotoID: "p.jpg", OldIsTrashed: false}},
+			counts:     [4]int{0, 0, 1, 0},
+			wantPhoto:  Photo{ID: "p.jpg"},
+			wantCounts: [4]int{},
+		},
+		{
+			name:       "trash false to true increments count",
+			photo:      Photo{ID: "p.jpg"},
+			event:      bus.Event{Type: bus.TypeCommandTrashPhoto, Payload: bus.CommandTrashPhotoPayload{PhotoID: "p.jpg", OldIsTrashed: true}},
+			wantPhoto:  Photo{ID: "p.jpg", IsTrashed: true},
+			wantCounts: [4]int{0, 0, 1, 0},
+		},
+		{
+			name:       "exact rotation restores stored value",
+			photo:      Photo{ID: "p.jpg", Rotation: 90},
+			event:      bus.Event{Type: bus.TypeCommandRotatePhoto, Payload: bus.CommandRotatePhotoPayload{PhotoID: "p.jpg", Direction: rotationReset, OldRotation: 180}},
+			counts:     [4]int{0, 0, 0, 1},
+			wantPhoto:  Photo{ID: "p.jpg", Rotation: 180},
+			wantCounts: [4]int{0, 0, 0, 1},
+		},
+		{
+			name:       "legacy right rotation is inverted",
+			photo:      Photo{ID: "p.jpg", Rotation: 90},
+			event:      bus.Event{Type: bus.TypeCommandRotatePhoto, Payload: bus.CommandRotatePhotoPayload{PhotoID: "p.jpg", Direction: rotationRight}},
+			counts:     [4]int{0, 0, 0, 1},
+			wantPhoto:  Photo{ID: "p.jpg"},
+			wantCounts: [4]int{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			state := AppState{
+				Photos:       map[string]Photo{"p.jpg": tc.photo},
+				History:      []bus.Event{tc.event},
+				UndoLen:      1,
+				StarredCount: tc.counts[0],
+				LabeledCount: tc.counts[1],
+				TrashedCount: tc.counts[2],
+				RotatedCount: tc.counts[3],
+			}
+
+			got, _, err := Reduce(&state, bus.Event{Type: bus.TypeCommandUndo, Payload: bus.CommandUndoPayload{}})
+			if err != nil {
+				t.Fatalf("undo: %v", err)
+			}
+			if got.Photos["p.jpg"] != tc.wantPhoto {
+				t.Fatalf("photo = %+v, want %+v", got.Photos["p.jpg"], tc.wantPhoto)
+			}
+			gotCounts := [4]int{got.StarredCount, got.LabeledCount, got.TrashedCount, got.RotatedCount}
+			if gotCounts != tc.wantCounts {
+				t.Fatalf("counts = %v, want %v", gotCounts, tc.wantCounts)
+			}
+		})
+	}
+}
+
+func TestApplyUndoCharacterizationBatchUsesReverseOrder(t *testing.T) {
+	batch := bus.Event{Type: bus.TypeCommandBatch, Payload: bus.CommandBatchPayload{Events: []bus.Event{
+		{Type: bus.TypeCommandToggleStar, Payload: bus.CommandToggleStarPayload{PhotoID: "p.jpg", OldStarred: false}},
+		{Type: bus.TypeCommandToggleStar, Payload: bus.CommandToggleStarPayload{PhotoID: "p.jpg", OldStarred: true}},
+		{Type: bus.TypeCommandLabelPhoto, Payload: bus.CommandLabelPhotoPayload{PhotoID: "p.jpg", OldLabel: 0}},
+		{Type: bus.TypeCommandLabelPhoto, Payload: bus.CommandLabelPhotoPayload{PhotoID: "p.jpg", OldLabel: 3}},
+	}}}
+	state := AppState{
+		Photos:  map[string]Photo{"p.jpg": {ID: "p.jpg"}},
+		History: []bus.Event{batch},
+		UndoLen: 1,
+	}
+
+	got, _, err := Reduce(&state, bus.Event{Type: bus.TypeCommandUndo, Payload: bus.CommandUndoPayload{}})
+	if err != nil {
+		t.Fatalf("undo batch: %v", err)
+	}
+	if photo := got.Photos["p.jpg"]; photo.IsStarred || photo.Label != noLabel {
+		t.Fatalf("reverse-order undo did not restore original photo: %+v", photo)
+	}
+	if got.StarredCount != 0 || got.LabeledCount != 0 {
+		t.Fatalf("reverse-order undo counts = starred:%d labeled:%d", got.StarredCount, got.LabeledCount)
+	}
+}
+
+func TestApplyUndoCharacterizationMissingPhotoIsIgnored(t *testing.T) {
+	event := bus.Event{Type: bus.TypeCommandTrashPhoto, Payload: bus.CommandTrashPhotoPayload{PhotoID: "missing.jpg", OldIsTrashed: true}}
+	state := AppState{Photos: map[string]Photo{}, History: []bus.Event{event}, UndoLen: 1, TrashedCount: 2}
+
+	got, undone, err := Reduce(&state, bus.Event{Type: bus.TypeCommandUndo, Payload: bus.CommandUndoPayload{}})
+	if err != nil {
+		t.Fatalf("undo missing photo: %v", err)
+	}
+	if undone.Type != bus.TypeCommandTrashPhoto || got.TrashedCount != 2 || len(got.Photos) != 0 {
+		t.Fatalf("missing photo undo changed state: undone=%q count=%d photos=%v", undone.Type, got.TrashedCount, got.Photos)
+	}
+}
 
 // ── Undo variants ──────────────────────────────────────────────────────────
 

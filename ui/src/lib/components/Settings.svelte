@@ -1,5 +1,7 @@
 <script lang="ts">
   import { appState } from '../appState.svelte';
+  import { filterState } from '../filterState.svelte';
+  import { viewState } from '../viewState.svelte';
   import { api } from '../api';
   import { i18n } from '../i18n.svelte';
   import { onMount } from 'svelte';
@@ -45,17 +47,17 @@
   });
 
   async function save() {
-    if (!appState.config) return;
-    appState.config.exiftoolPath = (appState.config.exiftoolPath || '').trim();
+    if (!viewState.config) return;
+    viewState.config.exiftoolPath = (viewState.config.exiftoolPath || '').trim();
 
     try {
-      await api.updateConfig(appState.config);
+      await api.updateConfig(viewState.config);
     } catch (e: any) {
       logger.error('Failed to save settings config', { error: e?.message || String(e) });
       return;
     }
 
-    appState.settingsOpen = false;
+    viewState.settingsOpen = false;
 
     try {
       await refreshSysInfo();
@@ -65,8 +67,8 @@
       });
     }
 
-    if (appState.filterMode === 'duplicates') {
-      appState.duplicateGroups = []; // Reset cache
+    if (filterState.filterMode === 'duplicates') {
+      filterState.duplicateGroups = []; // Reset cache
       try {
         await appState.updateFilteredIndices();
       } catch (e: any) {
@@ -78,13 +80,13 @@
   }
 
   async function applyExiftoolPath() {
-    if (!appState.config || applyingExifPath) return;
+    if (!viewState.config || applyingExifPath) return;
     applyingExifPath = true;
     exifPathFeedback = null;
-    appState.config.exiftoolPath = (appState.config.exiftoolPath || '').trim();
+    viewState.config.exiftoolPath = (viewState.config.exiftoolPath || '').trim();
 
     try {
-      await api.updateConfig(appState.config);
+      await api.updateConfig(viewState.config);
       await refreshSysInfo();
       if (sysInfo?.exiftool) {
         exifPathFeedback = { type: 'ok', text: i18n.t('exiftool_path_applied') };
@@ -127,10 +129,10 @@
         return;
       }
 
-      if (appState.config) {
-        const newShortcuts = { ...(appState.config.shortcuts || {}) };
+      if (viewState.config) {
+        const newShortcuts = { ...(viewState.config.shortcuts || {}) };
         newShortcuts[recordingAction] = key;
-        appState.config.shortcuts = newShortcuts;
+        viewState.config.shortcuts = newShortcuts;
       }
       
       recordingAction = null;
@@ -141,26 +143,26 @@
     if (e.key === 'Escape') {
       if (trashService.pickerOpen) {
         trashService.pickerOpen = false;
-      } else if (appState.settingsOpen) {
-        appState.settingsOpen = false;
+      } else if (viewState.settingsOpen) {
+        viewState.settingsOpen = false;
       }
     }
   }
 
   function resetShortcuts() {
-    if (appState.config) {
-      appState.config.shortcuts = {};
+    if (viewState.config) {
+      viewState.config.shortcuts = {};
     }
   }
 
   function resetConfig() {
     if (!confirm(i18n.t('confirm_reset_to_defaults'))) return;
-    if (appState.config) {
-      appState.config.theme = 'dark';
-      appState.config.duplicateThreshold = 90;
-      appState.config.autoRefresh = false;
-      appState.config.autoRefreshSeconds = 5;
-      appState.config.shortcuts = {};
+    if (viewState.config) {
+      viewState.config.theme = 'dark';
+      viewState.config.duplicateThreshold = 90;
+      viewState.config.autoRefresh = false;
+      viewState.config.autoRefreshSeconds = 5;
+      viewState.config.shortcuts = {};
       // We don't reset window size as it's environment-dependent
     }
   }
@@ -181,8 +183,8 @@
 </script>
 
 <Modal
-  isOpen={appState.settingsOpen}
-  onClose={() => appState.settingsOpen = false}
+  isOpen={viewState.settingsOpen}
+  onClose={() => viewState.settingsOpen = false}
   width="min(980px, 94vw)"
   padding="0"
   ariaLabel="settings-title"
@@ -220,7 +222,7 @@
       </nav>
 
       <div class="tab-content">
-        {#if appState.config}
+        {#if viewState.config}
           {#if activeTab === 'general'}
             <section class="settings-card">
               <h3>{i18n.t('settings_general')}</h3>
@@ -234,7 +236,7 @@
                 </div>
                 <div class="field">
                   <label for="theme-select">{i18n.t('theme')}</label>
-                  <select id="theme-select" bind:value={appState.config.theme}>
+                  <select id="theme-select" bind:value={viewState.config.theme}>
                     <option value="dark">{i18n.t('theme_dark')}</option>
                     <option value="light">{i18n.t('theme_light')}</option>
                   </select>
@@ -247,11 +249,11 @@
               <div class="field">
                 <label for="exif-path">{i18n.t('exiftool_path')}</label>
                 <div class="input-with-btn">
-                  {#if appState.config}
+                  {#if viewState.config}
                     <input
                       id="exif-path"
                       type="text"
-                      bind:value={appState.config.exiftoolPath}
+                      bind:value={viewState.config.exiftoolPath}
                       placeholder={i18n.t('placeholder_exiftool')}
                       oninput={() => (exifPathFeedback = null)}
                     />
@@ -260,8 +262,8 @@
                     </button>
                     <button class="mini-btn icon-btn" onclick={async () => {
                       const res = await api.exiftoolDialog();
-                      if (res?.path && appState.config) {
-                        appState.config.exiftoolPath = res.path;
+                      if (res?.path && viewState.config) {
+                        viewState.config.exiftoolPath = res.path;
                         await applyExiftoolPath();
                       }
                     }}>...</button>
@@ -283,8 +285,8 @@
                 {/if}
               </div>
               <div class="field">
-                <label for="dup-threshold">{i18n.t('similarity_threshold')}: {appState.config.duplicateThreshold}%</label>
-                <input id="dup-threshold" type="range" min="50" max="100" step="1" bind:value={appState.config.duplicateThreshold} />
+                <label for="dup-threshold">{i18n.t('similarity_threshold')}: {viewState.config.duplicateThreshold}%</label>
+                <input id="dup-threshold" type="range" min="50" max="100" step="1" bind:value={viewState.config.duplicateThreshold} />
               </div>
             </section>
 
@@ -302,28 +304,28 @@
               </div>
               <div class="switch-row">
                 <label class="switch">
-                  <input id="auto-refresh" type="checkbox" bind:checked={appState.config.autoRefresh} />
+                  <input id="auto-refresh" type="checkbox" bind:checked={viewState.config.autoRefresh} />
                   <span class="slider"></span>
                 </label>
                 <label for="auto-refresh">{i18n.t('auto_refresh')}</label>
               </div>
               <div class="switch-row">
                 <label class="switch">
-                  <input id="debug-toggle" type="checkbox" bind:checked={appState.config.debug} />
+                  <input id="debug-toggle" type="checkbox" bind:checked={viewState.config.debug} />
                   <span class="slider"></span>
                 </label>
                 <label for="debug-toggle">{i18n.t('enable_debug')}</label>
               </div>
-              <div class="field" class:disabled={!appState.config.autoRefresh}>
-                <label for="auto-refresh-interval">{i18n.t('auto_refresh_interval')}: {appState.config.autoRefreshSeconds}{i18n.t('unit_seconds')}</label>
+              <div class="field" class:disabled={!viewState.config.autoRefresh}>
+                <label for="auto-refresh-interval">{i18n.t('auto_refresh_interval')}: {viewState.config.autoRefreshSeconds}{i18n.t('unit_seconds')}</label>
                 <input
                   id="auto-refresh-interval"
                   type="range"
                   min="1"
                   max="60"
                   step="1"
-                  bind:value={appState.config.autoRefreshSeconds}
-                  disabled={!appState.config.autoRefresh}
+                  bind:value={viewState.config.autoRefreshSeconds}
+                  disabled={!viewState.config.autoRefresh}
                 />
               </div>
             </section>
@@ -393,10 +395,10 @@
             <section class="settings-card danger-zone-box">
               <h3>{i18n.t('danger_zone')}</h3>
               <div class="danger-grid">
-                <button class="btn danger" onclick={() => { if(confirm(i18n.t('confirm_clear_stars'))) { appState.resetStars(); appState.settingsOpen = false; } }}>
+                <button class="btn danger" onclick={() => { if(confirm(i18n.t('confirm_clear_stars'))) { appState.resetStars(); viewState.settingsOpen = false; } }}>
                   {i18n.t('clear_all_stars')}
                 </button>
-                <button class="btn danger" onclick={() => { if(confirm(i18n.t('confirm_clear_labels'))) { appState.resetLabels(); appState.settingsOpen = false; } }}>
+                <button class="btn danger" onclick={() => { if(confirm(i18n.t('confirm_clear_labels'))) { appState.resetLabels(); viewState.settingsOpen = false; } }}>
                   {i18n.t('clear_all_labels')}
                 </button>
                 <button class="btn danger" onclick={() => { if(confirm(i18n.t('confirm_reset_app_cache'))) { appState.resetAppCache(); } }}>
@@ -435,7 +437,7 @@
     </div>
 
     <div class="settings-footer">
-      <button class="btn" onclick={() => appState.settingsOpen = false}>{i18n.t('cancel')}</button>
+      <button class="btn" onclick={() => viewState.settingsOpen = false}>{i18n.t('cancel')}</button>
       <button class="btn primary" onclick={save}>{i18n.t('save')}</button>
     </div>
   </div>

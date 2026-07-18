@@ -27,6 +27,9 @@ type App struct {
 	refreshMu sync.Mutex
 }
 
+var applyEXIFOrientation = ApplyEXIFOrientation
+var resetExiftoolAvailabilityCache = exif.ResetExiftoolAvailabilityCache
+
 // NewApp creates a new App struct
 func NewApp(server *Server) *App {
 	return &App{
@@ -276,6 +279,9 @@ func (a *App) ToggleStar(index int, path string, paths []string, starred bool) (
 
 // Trash moves files to trash
 func (a *App) Trash(index int, path string, paths []string) (ActionResponse, error) {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+
 	slog.Debug("Trash action received", "index", index, "path", path, "paths_count", len(paths))
 	state, err := a.requireState()
 	if err != nil {
@@ -378,7 +384,7 @@ func (a *App) GetConfig() (domain.Config, error) {
 func (a *App) UpdateConfig(cfg domain.Config) error {
 	err := domain.UpdateConfig(cfg)
 	if err == nil {
-		exif.ResetExiftoolAvailabilityCache()
+		resetExiftoolAvailabilityCache()
 	}
 	return err
 }
@@ -636,7 +642,7 @@ func (a *App) ApplyRotation(index int, path string) error {
 		return domain.ErrExifWriteUnsupported
 	}
 
-	err = ApplyEXIFOrientation(a.bgContext(), absPath, rotation)
+	err = applyEXIFOrientation(a.bgContext(), absPath, rotation)
 	if err == nil {
 		// Invalidate cache since the file has changed physically
 		a.server.cache.DropPath(absPath)

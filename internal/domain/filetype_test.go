@@ -39,8 +39,19 @@ func TestDetectFromMagicBytes(t *testing.T) {
 	}{
 		{jpeg, FileTypeJPEG},
 		{png, FileTypePNG},
+		{append([]byte("GIF87a"), make([]byte, 6)...), FileTypeGIF},
+		{append([]byte("GIF89a"), make([]byte, 6)...), FileTypeGIF},
+		{append([]byte("BM"), make([]byte, 10)...), FileTypeBMP},
+		{[]byte{0x49, 0x49, 0x2A, 0x00, 0, 0, 0, 0, 0, 0, 0, 0}, FileTypeTIFF},
+		{[]byte{0x4D, 0x4D, 0x00, 0x2A, 0, 0, 0, 0, 0, 0, 0, 0}, FileTypeTIFF},
 		{webp, FileTypeWebP},
+		{[]byte{0, 0, 0, 0, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c'}, FileTypeHEIC},
+		{[]byte{0, 0, 0, 0, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'x'}, FileTypeHEIC},
+		{[]byte{0, 0, 0, 0, 'f', 't', 'y', 'p', 'm', 'i', 'f', '1'}, FileTypeHEIC},
+		{[]byte{0, 0, 0, 0, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'f'}, FileTypeHEIC},
+		{[]byte{0, 0, 0, 0, 'f', 't', 'y', 'p', 'a', 'v', 'i', 'f'}, FileTypeUnknown},
 		{[]byte("short"), FileTypeUnknown},
+		{make([]byte, magicHeaderSize), FileTypeUnknown},
 	}
 
 	for _, tc := range cases {
@@ -50,7 +61,7 @@ func TestDetectFromMagicBytes(t *testing.T) {
 	}
 }
 
-func TestDetectFromPathAndNewMediaFile(t *testing.T) {
+func TestDetectFromPath(t *testing.T) {
 	tempDir := t.TempDir()
 	p := filepath.Join(tempDir, "photo.jpg")
 	if err := os.WriteFile(p, []byte{0xFF, 0xD8, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0o644); err != nil {
@@ -61,8 +72,4 @@ func TestDetectFromPathAndNewMediaFile(t *testing.T) {
 		t.Fatalf("DetectFromPath() = %v, want %v", got, FileTypeJPEG)
 	}
 
-	mf := NewMediaFile(p)
-	if mf.Path != p || mf.Type != FileTypeJPEG {
-		t.Fatalf("unexpected MediaFile: %+v", mf)
-	}
 }
