@@ -18,6 +18,31 @@ func TestExtractMetadataReturnsErrorForMissingInput(t *testing.T) {
 	}
 }
 
+func TestMetadataFromExiftoolMapCharacterization(t *testing.T) {
+	metadata := metadataFromExiftoolMap(map[string]any{
+		"UniqueCameraModel": "Unique",
+		"CameraModelName":   "CameraName",
+		"Make":              "Maker",
+		"ISO":               float64(800),
+		"FNumber":           float64(2.8),
+		"ExposureTime":      float64(0),
+		"FocalLength":       "50 mm",
+		"ImageWidth":        float64(6000),
+		"ImageHeight":       float64(4000),
+		"DateTime":          "2024:01:02 03:04:05",
+	})
+
+	if metadata.Model != "Unique" || metadata.ISO != "800" || metadata.Aperture != "f/2.8" {
+		t.Fatalf("identity/exposure metadata = %+v", metadata)
+	}
+	if metadata.Shutter != "" {
+		t.Fatalf("zero exposure must not produce a reciprocal shutter, got %q", metadata.Shutter)
+	}
+	if metadata.Focal != "50 mm" || metadata.Width != 6000 || metadata.Height != 4000 || metadata.Date != "2024:01:02 03:04:05" {
+		t.Fatalf("dimensions/date metadata = %+v", metadata)
+	}
+}
+
 func TestExtractThumbnailCreateDestinationError(t *testing.T) {
 	err := ExtractThumbnail("source.raw", filepath.Join(t.TempDir(), "missing-dir", "thumb.jpg"))
 	if err == nil {

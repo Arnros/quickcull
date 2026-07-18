@@ -109,15 +109,15 @@ func TestMoveExportPreservesMetadataInDestinationFolder(t *testing.T) {
 	defer cleanup()
 
 	photoID := "b.jpg"
-	app.server.applyEvent(bus.Event{
+	mustApplyEvent(t, app.server, bus.Event{
 		Type:    bus.TypeCommandToggleStar,
 		Payload: bus.CommandToggleStarPayload{PhotoID: photoID, Starred: true, OldStarred: false},
 	})
-	app.server.applyEvent(bus.Event{
+	mustApplyEvent(t, app.server, bus.Event{
 		Type:    bus.TypeCommandLabelPhoto,
 		Payload: bus.CommandLabelPhotoPayload{PhotoID: photoID, Label: 3, OldLabel: 0},
 	})
-	app.server.applyEvent(bus.Event{
+	mustApplyEvent(t, app.server, bus.Event{
 		Type:    bus.TypeCommandRotatePhoto,
 		Payload: bus.CommandRotatePhotoPayload{PhotoID: photoID, Direction: "right"},
 	})
@@ -416,7 +416,7 @@ func TestExportSelectionLabelZeroReportsAllNonZeroLabels(t *testing.T) {
 	}
 	for id, label := range map[string]int{"red.jpg": 1, "blue.jpg": 2} {
 		if _, _, err := srv.applyEvent(bus.Event{
-			Type: bus.TypeCommandLabelPhoto,
+			Type:    bus.TypeCommandLabelPhoto,
 			Payload: bus.CommandLabelPhotoPayload{PhotoID: id, Label: label},
 		}); err != nil {
 			t.Fatal(err)
@@ -464,7 +464,7 @@ func TestExportSelectionStarredReportsOnlyStarredPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := srv.applyEvent(bus.Event{
-		Type: bus.TypeCommandToggleStar,
+		Type:    bus.TypeCommandToggleStar,
 		Payload: bus.CommandToggleStarPayload{PhotoID: "star.jpg", Starred: true},
 	}); err != nil {
 		t.Fatal(err)

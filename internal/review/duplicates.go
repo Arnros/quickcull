@@ -200,8 +200,6 @@ type MediaCache struct {
 	exifGroup   singleflight.Group
 	cacheDir    string
 	computeSem  chan struct{}
-
-	bkRoot *bkNode
 }
 
 const (
@@ -253,7 +251,6 @@ func (c *MediaCache) LoadCache(cacheDir string) {
 	// CLEAR IN-MEMORY CACHES to prevent accumulation across folder changes
 	c.hashCache = make(map[string]*goimagehash.ImageHash)
 	c.exifCache = make(map[string]*EXIFInfo)
-	c.bkRoot = nil
 	defer c.mu.Unlock()
 
 	if c.persistence != nil {
@@ -842,59 +839,73 @@ func (c *MediaCache) GetDuplicateGroups(state *State, threshold float64) [][]int
 		return nil
 	}
 	maxDist := thresholdToMaxDist(threshold)
-
-	// 1. Snapshot hashes under short RLock
-	hashes := make([]uint64, total)
-	valid := make([]bool, total)
-	for i := 0; i < total; i++ {
-		path, err := state.AbsPath(i)
-		if err == nil {
-			if h := c.GetHashCached(path); h != nil {
-				hashes[i] = h.GetHash()
-				valid[i] = true
-			}
-		}
-	}
-
-	// 2. Rebuild/update BK-tree under lock (inline insert avoids recursion depth issues on 24k+ photos)
-	c.mu.Lock()
-	for i := 0; i < total; i++ {
-		if !valid[i] {
-			continue
-		}
-		if c.bkRoot == nil {
-			c.bkRoot = &bkNode{index: i, hash: hashes[i], children: make(map[int]*bkNode)}
-			continue
-		}
-		node := c.bkRoot
-		for {
-			dist := bits.OnesCount64(hashes[i] ^ node.hash)
-			if dist == 0 && i == node.index {
-				break
-			}
-			if child, ok := node.children[dist]; ok {
-				node = child
-				continue
-			}
-			node.children[dist] = &bkNode{index: i, hash: hashes[i], children: make(map[int]*bkNode)}
-			break
-		}
-	}
-	root := c.bkRoot
-	c.mu.Unlock()
-
+	hashes, valid := c.snapshotCachedHashes(state, total)
+	root := buildBKTree(hashes, valid)
 	if root == nil {
 		return nil
 	}
 
-	// 3. Similarity search using union-find
-	uf := newUnionFind(total)
+	uf := unionDuplicateCandidates(root, hashes, valid, maxDist)
+	groups := collectDuplicateGroups(uf, valid)
+	slog.Info("GetDuplicateGroups: completed", "total", total, "groups", len(groups), "duration_ms", time.Since(start).Milliseconds())
+	return groups
+}
+
+func (c *MediaCache) snapshotCachedHashes(state *State, total int) ([]uint64, []bool) {
+	hashes := make([]uint64, total)
+	valid := make([]bool, total)
 	for i := 0; i < total; i++ {
+		path, err := state.AbsPath(i)
+		if err != nil {
+			continue
+		}
+		if hash := c.GetHashCached(path); hash != nil {
+			hashes[i] = hash.GetHash()
+			valid[i] = true
+		}
+	}
+	return hashes, valid
+}
+
+func buildBKTree(hashes []uint64, valid []bool) *bkNode {
+	var root *bkNode
+	for index, hash := range hashes {
+		if !valid[index] {
+			continue
+		}
+		if root == nil {
+			root = &bkNode{index: index, hash: hash, children: make(map[int]*bkNode)}
+			continue
+		}
+		insertBKNode(root, index, hash)
+	}
+	return root
+}
+
+func insertBKNode(root *bkNode, index int, hash uint64) {
+	node := root
+	for {
+		distance := bits.OnesCount64(hash ^ node.hash)
+		if distance == 0 && index == node.index {
+			return
+		}
+		if child, ok := node.children[distance]; ok {
+			node = child
+			continue
+		}
+		node.children[distance] = &bkNode{index: index, hash: hash, children: make(map[int]*bkNode)}
+		return
+	}
+}
+
+func unionDuplicateCandidates(root *bkNode, hashes []uint64, valid []bool, maxDistance int) *unionFind {
+	uf := newUnionFind(len(hashes))
+	for i, hash := range hashes {
 		if !valid[i] {
 			continue
 		}
 		candidates := make([]int, 0, bkCandidatesInitCap)
-		bkSearch(root, hashes[i], maxDist, &candidates)
+		bkSearch(root, hash, maxDistance, &candidates)
 		for _, j := range candidates {
 			if j <= i || !valid[j] {
 				continue
@@ -902,23 +913,25 @@ func (c *MediaCache) GetDuplicateGroups(state *State, threshold float64) [][]int
 			uf.union(i, j)
 		}
 	}
+	return &uf
+}
 
+func collectDuplicateGroups(uf *unionFind, valid []bool) [][]int {
 	groupMap := make(map[int][]int)
-	for i := 0; i < total; i++ {
-		if !valid[i] {
-			continue
+	for index, isValid := range valid {
+		if isValid {
+			root := uf.find(index)
+			groupMap[root] = append(groupMap[root], index)
 		}
-		groupMap[uf.find(i)] = append(groupMap[uf.find(i)], i)
 	}
 
-	var groups [][]int
-	for _, g := range groupMap {
-		if len(g) > 1 {
-			sort.Ints(g)
-			groups = append(groups, g)
+	groups := make([][]int, 0, len(groupMap))
+	for _, group := range groupMap {
+		if len(group) > 1 {
+			sort.Ints(group)
+			groups = append(groups, group)
 		}
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i][0] < groups[j][0] })
-	slog.Info("GetDuplicateGroups: completed", "total", total, "groups", len(groups), "duration_ms", time.Since(start).Milliseconds())
 	return groups
 }

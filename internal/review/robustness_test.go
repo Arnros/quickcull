@@ -111,7 +111,9 @@ func TestMediaCacheWithMock(t *testing.T) {
 
 	// Test putting and getting metadata through the abstraction
 	info := &EXIFInfo{Camera: "TestCam", Width: 100, Height: 100}
-	mc.persistence.PutMetadata("test.jpg", info)
+	if err := mc.persistence.PutMetadata("test.jpg", info); err != nil {
+		t.Fatalf("put metadata: %v", err)
+	}
 
 	got := mc.GetMetadata("test.jpg")
 	if got == nil || got.Camera != "TestCam" {
@@ -143,8 +145,8 @@ func TestReadOnlyFileOperations(t *testing.T) {
 	}
 
 	defer func() {
-		os.Chmod(root, 0755)
-		os.Chmod(filePath, 0644)
+		_ = os.Chmod(root, 0o755)
+		_ = os.Chmod(filePath, 0o644)
 	}()
 
 	// Initialize State

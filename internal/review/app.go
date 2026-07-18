@@ -502,31 +502,13 @@ func (a *App) Refresh(currentIndex int) (ActionResponse, error) {
 		return ActionResponse{}, domain.ErrFolderNotFound
 	}
 
-	filesChan := make(chan string, 100)
-	scanErrCh := make(chan error, 1)
-	utils.SafeGo(func() {
-		scanErrCh <- scanFiles(state.Root(), filesChan)
-	})
-
-	var newFiles []string
-	for f := range filesChan {
-		newFiles = append(newFiles, f)
-	}
-	if err := <-scanErrCh; err != nil {
+	newFiles, err := scanRefreshFiles(state.Root())
+	if err != nil {
 		return ActionResponse{}, newScanError(scanOpRefresh, state.Root(), err)
 	}
-	sort.Strings(newFiles)
 
 	if currentState := a.server.getState(); currentState != state {
-		newTotal := 0
-		newIndex := -1
-		if currentState != nil {
-			newTotal = currentState.Len()
-			if newTotal > 0 {
-				newIndex = min(max(currentIndex, 0), newTotal-1)
-			}
-		}
-		return ActionResponse{Stats: a.snapshotStats(), Total: newTotal, Index: newIndex}, nil
+		return a.staleRefreshResponse(currentState, currentIndex), nil
 	}
 
 	var curRel string
@@ -536,9 +518,48 @@ func (a *App) Refresh(currentIndex int) (ActionResponse, error) {
 
 	newTotal := state.UpdateFiles(newFiles)
 	a.server.invalidateBurstCache()
-	validSet := make(map[string]struct{}, newTotal)
-	derivedKeep := make(map[string]struct{}, newTotal*2+2)
-	for _, p := range state.ActiveAbsPaths() {
+	a.purgeRefreshCaches(state)
+	a.server.ReconcileScannedFiles(newFiles)
+
+	newIndex := resolveRefreshIndex(state, curRel, currentIndex, newTotal)
+	a.server.startBackgroundAnalysis(a.bgContext())
+
+	return ActionResponse{Stats: a.snapshotStats(), Total: newTotal, Index: newIndex}, nil
+}
+
+func scanRefreshFiles(root string) ([]string, error) {
+	filesChan := make(chan string, 100)
+	scanErrCh := make(chan error, 1)
+	utils.SafeGo(func() { scanErrCh <- scanFiles(root, filesChan) })
+
+	var files []string
+	for file := range filesChan {
+		files = append(files, file)
+	}
+	if err := <-scanErrCh; err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func (a *App) staleRefreshResponse(state *State, currentIndex int) ActionResponse {
+	total := 0
+	index := -1
+	if state != nil {
+		total = state.Len()
+		if total > 0 {
+			index = min(max(currentIndex, 0), total-1)
+		}
+	}
+	return ActionResponse{Stats: a.snapshotStats(), Total: total, Index: index}
+}
+
+func (a *App) purgeRefreshCaches(state *State) {
+	activePaths := state.ActiveAbsPaths()
+	validSet := make(map[string]struct{}, len(activePaths))
+	derivedKeep := make(map[string]struct{}, len(activePaths)*2+2)
+	for _, p := range activePaths {
 		validSet[p] = struct{}{}
 		if thumbPath, err := ThumbCachePathForSource(p, a.server.cacheDir); err == nil {
 			derivedKeep[thumbPath] = struct{}{}
@@ -557,31 +578,22 @@ func (a *App) Refresh(currentIndex int) (ActionResponse, error) {
 	if derivedRemoved > 0 {
 		slog.Info("Derived cache GC completed", "files_removed", derivedRemoved)
 	}
-	a.server.ReconcileScannedFiles(newFiles)
+}
 
+func resolveRefreshIndex(state *State, currentPath string, currentIndex, total int) int {
 	newIndex := -1
-	if curRel != "" {
-		if idx := state.FindIndex(curRel); idx != -1 {
+	if currentPath != "" {
+		if idx := state.FindIndex(currentPath); idx != -1 {
 			newIndex = idx
 		}
 	}
-	if newIndex == -1 && newTotal > 0 {
-		newIndex = min(currentIndex, newTotal-1)
+	if newIndex == -1 && total > 0 {
+		newIndex = min(currentIndex, total-1)
 		if newIndex < 0 {
 			newIndex = 0
 		}
 	}
-
-	a.server.startBackgroundAnalysis(a.bgContext())
-
-	out := ActionResponse{
-		Stats: a.snapshotStats(),
-		Total: newTotal,
-		Index: newIndex,
-	}
-	// We don't call emitStateUpdate here to avoid double-broadcast
-	// since the caller of Refresh usually handles the return value.
-	return out, nil
+	return newIndex
 }
 
 // Rotate rotates an image

@@ -44,20 +44,26 @@ func (s *Server) StartEventEngine(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case ev := <-chStar:
-				s.applyEvent(ev)
+				s.applyBusEvent(ev)
 			case ev := <-chTrash:
-				s.applyEvent(ev)
+				s.applyBusEvent(ev)
 			case ev := <-chLabel:
-				s.applyEvent(ev)
+				s.applyBusEvent(ev)
 			case ev := <-chRotate:
-				s.applyEvent(ev)
+				s.applyBusEvent(ev)
 			case ev := <-chUndo:
-				s.applyEvent(ev)
+				s.applyBusEvent(ev)
 			case ev := <-chBatch:
-				s.applyEvent(ev)
+				s.applyBusEvent(ev)
 			case ev := <-chReset:
-				s.applyEvent(ev)
+				s.applyBusEvent(ev)
 			}
 		}
 	})
+}
+
+func (s *Server) applyBusEvent(event bus.Event) {
+	if _, _, err := s.applyEvent(event); err != nil {
+		utils.LogError("Event engine failed to apply event", "type", event.Type, "error", err)
+	}
 }

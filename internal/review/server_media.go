@@ -207,49 +207,44 @@ func (s *Server) getBurstInfo(index int, absPath string) *burstResult {
 	burstLimit := time.Duration(cfg.BurstSeconds) * time.Second
 	maxSearch := cfg.BurstMaxFiles
 
-	burstCount := 1
-	burstIndex := 1
-
-	start := index - maxSearch
-	if start < 0 {
-		start = 0
-	}
-	for i := index - 1; i >= start; i-- {
-		p, _ := state.AbsPath(i)
-		if ex := s.cache.GetMetadataCached(p); ex != nil && ex.Date != "" {
-			d := utils.ParseExifDate(ex.Date)
-			if diff := curDate.Sub(d); !d.IsZero() && diff >= 0 && diff < burstLimit {
-				burstCount++
-				burstIndex++
-				continue
-			}
-		}
-		break
-	}
-
-	total := state.Len()
-	end := index + maxSearch
-	if end >= total {
-		end = total - 1
-	}
-	for i := index + 1; i <= end; i++ {
-		p, _ := state.AbsPath(i)
-		if ex := s.cache.GetMetadataCached(p); ex != nil && ex.Date != "" {
-			d := utils.ParseExifDate(ex.Date)
-			if diff := d.Sub(curDate); !d.IsZero() && diff >= 0 && diff < burstLimit {
-				burstCount++
-				continue
-			}
-		}
-		break
-	}
+	before := s.countAdjacentBurst(state, index, -1, maxSearch, curDate, burstLimit)
+	after := s.countAdjacentBurst(state, index, 1, maxSearch, curDate, burstLimit)
+	burstCount := 1 + before + after
 
 	var br *burstResult
 	if burstCount > 1 {
-		br = &burstResult{count: burstCount, index: burstIndex}
+		br = &burstResult{count: burstCount, index: before + 1}
 	}
 	s.burstCache.Store(index, br)
 	return br
+}
+
+func (s *Server) countAdjacentBurst(state *State, index, step, maxSearch int, current time.Time, limit time.Duration) int {
+	count := 0
+	for offset := 1; offset <= maxSearch; offset++ {
+		candidateIndex := index + offset*step
+		if candidateIndex < 0 || candidateIndex >= state.Len() {
+			break
+		}
+		path, err := state.AbsPath(candidateIndex)
+		if err != nil {
+			break
+		}
+		metadata := s.cache.GetMetadataCached(path)
+		if metadata == nil || metadata.Date == "" {
+			break
+		}
+		candidate := utils.ParseExifDate(metadata.Date)
+		difference := candidate.Sub(current)
+		if step < 0 {
+			difference = current.Sub(candidate)
+		}
+		if candidate.IsZero() || difference < 0 || difference >= limit {
+			break
+		}
+		count++
+	}
+	return count
 }
 
 func (s *Server) invalidateBurstCache() {

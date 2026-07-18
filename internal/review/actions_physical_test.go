@@ -59,6 +59,20 @@ func setupPhysicalTest(t *testing.T) (string, *App, func()) {
 	return tmpDir, app, cleanup
 }
 
+func mustApplyEvent(t *testing.T, server *Server, event bus.Event) {
+	t.Helper()
+	if _, _, err := server.applyEvent(event); err != nil {
+		t.Fatalf("apply event %s: %v", event.Type, err)
+	}
+}
+
+func mustLoadState(t *testing.T, server *Server, root string) {
+	t.Helper()
+	if err := server.LoadState(root); err != nil {
+		t.Fatalf("load state %s: %v", root, err)
+	}
+}
+
 func TestPhysicalStarAction(t *testing.T) {
 	_, app, cleanup := setupPhysicalTest(t)
 	defer cleanup()
@@ -103,12 +117,12 @@ func TestPhysicalLabelAction(t *testing.T) {
 		Payload: bus.CommandLabelPhotoPayload{PhotoID: photoID, Label: 3},
 	}
 
-	app.server.applyEvent(event)
+	mustApplyEvent(t, app.server, event)
 
 	// Vérifier après rechargement
 	srv2 := NewServer()
 	srv2.persistence = app.server.persistence
-	srv2.LoadState(app.server.appState.Root)
+	mustLoadState(t, srv2, app.server.appState.Root)
 
 	if srv2.appState.Photos[photoID].Label != 3 {
 		t.Errorf("Expected label 3 after reload, got %d", srv2.appState.Photos[photoID].Label)
@@ -127,14 +141,16 @@ func TestPhysicalTrashAndRestoreSequence(t *testing.T) {
 	// On simule l'appel synchrone complet
 	// a. Mouvement physique
 	state := app.server.getState()
-	state.Trash(state.FindIndex(photoID))
-	
+	if _, err := state.Trash(state.FindIndex(photoID)); err != nil {
+		t.Fatalf("trash %s: %v", photoID, err)
+	}
+
 	// b. Mise à jour de l'état immuable (v2) et historique
 	trashEvent := bus.Event{
 		Type:    bus.TypeCommandTrashPhoto,
 		Payload: bus.CommandTrashPhotoPayload{PhotoID: photoID},
 	}
-	app.server.applyEvent(trashEvent)
+	mustApplyEvent(t, app.server, trashEvent)
 
 	// Vérification physique du Trash
 	if _, err := os.Stat(trashPath); os.IsNotExist(err) {
@@ -163,7 +179,7 @@ func TestPhysicalRotationAction(t *testing.T) {
 
 	photoID := "a.jpg"
 	// 1. Rotation visuelle (90 deg)
-	app.server.applyEvent(bus.Event{
+	mustApplyEvent(t, app.server, bus.Event{
 		Type:    bus.TypeCommandRotatePhoto,
 		Payload: bus.CommandRotatePhotoPayload{PhotoID: photoID, Direction: "right"},
 	})
@@ -171,7 +187,7 @@ func TestPhysicalRotationAction(t *testing.T) {
 	// 2. Vérifier persistance après reload
 	srv2 := NewServer()
 	srv2.persistence = app.server.persistence
-	srv2.LoadState(app.server.appState.Root)
+	mustLoadState(t, srv2, app.server.appState.Root)
 
 	if srv2.appState.Photos[photoID].Rotation != 90 {
 		t.Errorf("Rotation did not survive reload, got %d", srv2.appState.Photos[photoID].Rotation)
@@ -190,7 +206,7 @@ func TestPhysicalApplyRotation(t *testing.T) {
 
 	photoID := "a.jpg"
 	// 1. Set visual rotation to 90
-	app.server.applyEvent(bus.Event{
+	mustApplyEvent(t, app.server, bus.Event{
 		Type:    bus.TypeCommandRotatePhoto,
 		Payload: bus.CommandRotatePhotoPayload{PhotoID: photoID, Direction: "right"},
 	})
@@ -216,7 +232,7 @@ func TestPhysicalBatchTrash(t *testing.T) {
 	defer cleanup()
 
 	paths := []string{"a.jpg", "b.jpg"}
-	
+
 	// Simulation du Trash par lot
 	_, err := app.Trash(0, "", paths)
 	if err != nil {
@@ -236,17 +252,17 @@ func TestPhysicalMetadataReset(t *testing.T) {
 	defer cleanup()
 
 	// 1. Mettre des étoiles et labels
-	app.server.applyEvent(bus.Event{
+	mustApplyEvent(t, app.server, bus.Event{
 		Type:    bus.TypeCommandToggleStar,
 		Payload: bus.CommandToggleStarPayload{PhotoID: "a.jpg", Starred: true, OldStarred: false},
 	})
-	app.server.applyEvent(bus.Event{
+	mustApplyEvent(t, app.server, bus.Event{
 		Type:    bus.TypeCommandLabelPhoto,
 		Payload: bus.CommandLabelPhotoPayload{PhotoID: "b.jpg", Label: 2},
 	})
 
 	// 2. RESET complet
-	app.server.applyEvent(bus.Event{
+	mustApplyEvent(t, app.server, bus.Event{
 		Type:    bus.TypeCommandResetMetadata,
 		Payload: bus.CommandResetMetadataPayload{Scope: "all"},
 	})
@@ -254,7 +270,7 @@ func TestPhysicalMetadataReset(t *testing.T) {
 	// 3. Vérifier persistance du vide
 	srv2 := NewServer()
 	srv2.persistence = app.server.persistence
-	srv2.LoadState(app.server.appState.Root)
+	mustLoadState(t, srv2, app.server.appState.Root)
 
 	if srv2.appState.Photos["a.jpg"].IsStarred || srv2.appState.Photos["b.jpg"].Label != 0 {
 		t.Error("Metadata reset failed to persist")
@@ -271,7 +287,7 @@ func TestPhysicalDuplicateDetection(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(root, "dup2.jpg"), content, 0644)
 
 	// Re-scanner pour inclure les nouveaux fichiers
-	app.server.LoadState(root)
+	mustLoadState(t, app.server, root)
 
 	// FORCER LE HACHAGE SYNCHRONE POUR LE TEST
 	state2 := app.server.getState()

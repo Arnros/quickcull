@@ -132,7 +132,9 @@ func TestState(t *testing.T) {
 
 	files := []string{"a.jpg", "b.jpg", "c.jpg"}
 	for _, f := range files {
-		os.WriteFile(filepath.Join(tempDir, f), []byte("test"), 0644)
+		if err := os.WriteFile(filepath.Join(tempDir, f), []byte("test"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", f, err)
+		}
 	}
 
 	state := NewState(tempDir, files)
@@ -164,7 +166,9 @@ func TestState(t *testing.T) {
 		defer os.RemoveAll(tempDir3)
 		files3 := []string{"x.jpg", "y.jpg", "z.jpg"}
 		for _, f := range files3 {
-			os.WriteFile(filepath.Join(tempDir3, f), []byte("test"), 0644)
+			if err := os.WriteFile(filepath.Join(tempDir3, f), []byte("test"), 0o644); err != nil {
+				t.Fatalf("write %s: %v", f, err)
+			}
 		}
 		s3 := NewState(tempDir3, files3)
 

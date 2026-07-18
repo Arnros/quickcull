@@ -53,8 +53,6 @@ func AddToHistory(path string) error {
 	err = os.WriteFile(target, data, 0o600)
 	if err != nil {
 		slog.Error("History write failed", "file", target, "error", err)
-	} else {
-		// slog.Info("History updated", "path", absPath) // Uncommenting for less noise
 	}
 	return err
 }

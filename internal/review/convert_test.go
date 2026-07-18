@@ -17,10 +17,7 @@ func TestConvertRAW_AcceptsSmallValidPreviewFromExiftool(t *testing.T) {
 	srcPath := filepath.Join(tmp, "photo.dng")
 	cacheDir := filepath.Join(tmp, "cache")
 
-	preview := []byte{
-		0xFF, 0xD8, 0xFF, 0xD9,
-	}
-	preview = validJPEGBytes(t)
+	preview := validJPEGBytes(t)
 	if err := os.WriteFile(srcPath, []byte("raw"), 0o600); err != nil {
 		t.Fatalf("write raw source: %v", err)
 	}
@@ -119,10 +116,7 @@ func TestConvertRAW_RebuildsCorruptedCachedPreview(t *testing.T) {
 		t.Fatalf("write corrupted cache file: %v", err)
 	}
 
-	preview := []byte{
-		0xFF, 0xD8, 0xFF, 0xD9,
-	}
-	preview = validJPEGBytes(t)
+	preview := validJPEGBytes(t)
 	prevAvailable := isExiftoolAvailable
 	prevExtract := extractThumbnail
 	t.Cleanup(func() {

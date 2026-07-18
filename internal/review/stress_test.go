@@ -28,7 +28,7 @@ func TestStressConcurrentEvents(t *testing.T) {
 
 	srv := NewServer()
 	srv.persistence = store
-	
+
 	// Simuler un état avec 1 photo
 	photoID := "stress.jpg"
 	srv.appState = &AppState{
@@ -41,6 +41,7 @@ func TestStressConcurrentEvents(t *testing.T) {
 	const numGoroutines = 100
 	const actionsPerGoroutine = 10
 	var wg sync.WaitGroup
+	errCh := make(chan error, numGoroutines*actionsPerGoroutine)
 
 	// On lance une rafale d'étoiles (toggle)
 	for i := 0; i < numGoroutines; i++ {
@@ -48,15 +49,22 @@ func TestStressConcurrentEvents(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < actionsPerGoroutine; j++ {
-				srv.applyEvent(bus.Event{
+				_, _, err := srv.applyEvent(bus.Event{
 					Type:    bus.TypeCommandToggleStar,
 					Payload: bus.CommandToggleStarPayload{PhotoID: photoID, Starred: true, OldStarred: false},
 				})
+				if err != nil {
+					errCh <- err
+				}
 			}
 		}()
 	}
 
 	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Errorf("concurrent apply event: %v", err)
+	}
 
 	// Avec 1000 toggles (pair), l'étoile devrait être à false (si initialement false)
 	// L'important est surtout que le programme n'ait pas crashé ou eu de "race condition" détectée par le runtime
@@ -75,7 +83,9 @@ func TestStressCorruptedImages(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		fname := filepath.Join(tmpDir, "corrupt"+string(rune(i))+".jpg")
 		junk := make([]byte, 1024)
-		rand.Read(junk)
+		if _, err := rand.Read(junk); err != nil {
+			t.Fatalf("random test data: %v", err)
+		}
 		_ = os.WriteFile(fname, junk, 0644)
 	}
 
@@ -88,10 +98,10 @@ func TestStressCorruptedImages(t *testing.T) {
 	// Lancer l'analyse en arrière-plan et attendre un peu
 	ctx, cancel := context.WithCancel(context.Background())
 	srv.startBackgroundAnalysis(ctx)
-	
+
 	// On laisse le temps aux workers de se "casser les dents" sur les fichiers
-	cancel() 
-	
+	cancel()
+
 	t.Log("Corrupted images stress test completed without crash")
 }
 
@@ -103,10 +113,12 @@ func TestStressLargeHistoryUndo(t *testing.T) {
 	photoID := "a.jpg"
 	// Faire 50 actions sur le même fichier
 	for i := 0; i < 50; i++ {
-		srv.server.applyEvent(bus.Event{
+		if _, _, err := srv.server.applyEvent(bus.Event{
 			Type:    bus.TypeCommandToggleStar,
 			Payload: bus.CommandToggleStarPayload{PhotoID: photoID, Starred: true, OldStarred: false},
-		})
+		}); err != nil {
+			t.Fatalf("apply event %d: %v", i, err)
+		}
 	}
 
 	// Annuler les 50 actions

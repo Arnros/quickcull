@@ -43,7 +43,6 @@ func (s *Server) SyncFullState() {
 	s.finalizeSync(isLarge)
 
 	// 5. Cleanup
-	keys = nil
 	runtime.GC()
 	utils.LogCore("SyncFullState: delivery complete and memory flushed")
 }

@@ -222,7 +222,7 @@ func TestAppTrashRobustness(t *testing.T) {
 
 	// Chmod root to 0500 to prevent deletion
 	_ = os.Chmod(root, 0500)
-	defer os.Chmod(root, 0755)
+	defer func() { _ = os.Chmod(root, 0o755) }()
 
 	_, trashErr := app.Trash(0, "test.jpg", nil)
 	// We expect failure or success depending on OS, but app should not panic

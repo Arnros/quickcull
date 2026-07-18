@@ -347,59 +347,62 @@ func ExtractMetadata(path string) (*Metadata, error) {
 		return nil, err
 	}
 	var res []map[string]any
-	if json.Unmarshal(output, &res) != nil || len(res) == 0 {
-		return nil, errors.New("json")
+	if err := json.Unmarshal(output, &res); err != nil {
+		return nil, fmt.Errorf("decode exiftool metadata: %w", err)
 	}
-	m := res[0]
-	r := &Metadata{}
-	if v, ok := m["Model"].(string); ok {
-		r.Model = v
+	if len(res) == 0 {
+		return nil, errors.New("exiftool metadata response is empty")
 	}
-	if r.Model == "" {
-		if v, ok := m["UniqueCameraModel"].(string); ok {
-			r.Model = v
+	return metadataFromExiftoolMap(res[0]), nil
+}
+
+func metadataFromExiftoolMap(values map[string]any) *Metadata {
+	metadata := &Metadata{
+		Model: firstMetadataString(values, "Model", "UniqueCameraModel", "CameraModelName", "Make"),
+		Focal: firstMetadataString(values, "FocalLength"),
+		Date:  firstMetadataString(values, "DateTimeOriginal", "DateTime"),
+	}
+	if value, ok := values["ISO"]; ok {
+		metadata.ISO = fmt.Sprintf("%v", value)
+	}
+	if value, ok := values["FNumber"].(float64); ok {
+		metadata.Aperture = fmt.Sprintf("f/%.1f", value)
+	}
+	metadata.Shutter = formatExiftoolShutter(values["ExposureTime"])
+	metadata.Width = metadataDimension(values["ImageWidth"])
+	metadata.Height = metadataDimension(values["ImageHeight"])
+	return metadata
+}
+
+func firstMetadataString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := values[key].(string); ok && value != "" {
+			return value
 		}
 	}
-	if r.Model == "" {
-		if v, ok := m["CameraModelName"].(string); ok {
-			r.Model = v
+	return ""
+}
+
+func formatExiftoolShutter(value any) string {
+	switch typed := value.(type) {
+	case string:
+		if typed != "" {
+			return typed + " s"
+		}
+	case float64:
+		if typed >= 1 {
+			return fmt.Sprintf("%.1f s", typed)
+		}
+		if typed > 0 {
+			return fmt.Sprintf("1/%d s", int(1.0/typed))
 		}
 	}
-	if r.Model == "" {
-		if v, ok := m["Make"].(string); ok {
-			r.Model = v
-		}
+	return ""
+}
+
+func metadataDimension(value any) int {
+	if dimension, ok := value.(float64); ok {
+		return int(dimension)
 	}
-	if v, ok := m["ISO"]; ok {
-		r.ISO = fmt.Sprintf("%v", v)
-	}
-	if v, ok := m["FNumber"].(float64); ok {
-		r.Aperture = fmt.Sprintf("f/%.1f", v)
-	}
-	if v, ok := m["ExposureTime"]; ok {
-		if s, ok := v.(string); ok {
-			r.Shutter = s + " s"
-		} else if f, ok := v.(float64); ok {
-			if f >= 1 {
-				r.Shutter = fmt.Sprintf("%.1f s", f)
-			} else {
-				r.Shutter = fmt.Sprintf("1/%d s", int(1.0/f))
-			}
-		}
-	}
-	if v, ok := m["FocalLength"].(string); ok {
-		r.Focal = v
-	}
-	if v, ok := m["ImageWidth"].(float64); ok {
-		r.Width = int(v)
-	}
-	if v, ok := m["ImageHeight"].(float64); ok {
-		r.Height = int(v)
-	}
-	if v, ok := m["DateTimeOriginal"].(string); ok {
-		r.Date = v
-	} else if v, ok := m["DateTime"].(string); ok {
-		r.Date = v
-	}
-	return r, nil
+	return 0
 }
