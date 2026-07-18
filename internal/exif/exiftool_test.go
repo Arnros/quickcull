@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -121,15 +122,15 @@ func TestIsExiftoolAvailable_ResetCache(t *testing.T) {
 //
 // We simulate a stuck process by spawning a child that ignores stdin and
 // blocks for far longer than closeTimeout. The test asserts that:
-//   1. Close returns within ~2×closeTimeout (kill path)
-//   2. The child process is actually terminated (no orphan)
+//  1. Close returns within ~2×closeTimeout (kill path)
+//  2. The child process is actually terminated (no orphan)
 func TestSession_CloseKillsProcessOnTimeout(t *testing.T) {
 	// Spawn a long-running child that ignores its stdin curl entirely.
 	// We invoke `sleep` via bash so we can redirect stdin from /dev/null and
 	// ensure the child never sees Close's "-stay_open False" handshake.
-	cmd := exec.Command("sleep", "30")
+	cmd := newBlockingTestCommand("30s")
 	if err := cmd.Start(); err != nil {
-		t.Skipf("sleep unavailable: %v", err)
+		t.Fatalf("start helper process: %v", err)
 	}
 	t.Cleanup(func() {
 		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
@@ -161,9 +162,9 @@ func TestSession_CloseKillsProcessOnTimeout(t *testing.T) {
 	}
 
 	// Process must be terminated. cmd.ProcessState is populated only after
-// cmd.Wait() returns, so a non-nil ProcessState means the child actually
-// exited (here: was killed by our timeout). Exited() would return false on
-// a signal kill, so we don't rely on it.
+	// cmd.Wait() returns, so a non-nil ProcessState means the child actually
+	// exited (here: was killed by our timeout). Exited() would return false on
+	// a signal kill, so we don't rely on it.
 	if cmd.ProcessState == nil {
 		t.Fatalf("process state is nil after Close; child was not Wait'd (still running?)")
 	}
@@ -172,9 +173,9 @@ func TestSession_CloseKillsProcessOnTimeout(t *testing.T) {
 // TestSession_CloseIdempotent verifies that calling Close multiple times on the
 // same session is safe (Quit + ResetAppCache may both call it).
 func TestSession_CloseIdempotent(t *testing.T) {
-	cmd := exec.Command("sleep", "1")
+	cmd := newBlockingTestCommand("20ms")
 	if err := cmd.Start(); err != nil {
-		t.Skipf("sleep unavailable: %v", err)
+		t.Fatalf("start helper process: %v", err)
 	}
 	t.Cleanup(func() {
 		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
@@ -197,4 +198,23 @@ func TestSession_CloseIdempotent(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("third Close: %v", err)
 	}
+}
+
+func newBlockingTestCommand(duration string) *exec.Cmd {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSessionHelperProcess$")
+	cmd.Env = append(os.Environ(), "QUICKCULL_EXIF_HELPER_DURATION="+duration)
+	return cmd
+}
+
+func TestSessionHelperProcess(t *testing.T) {
+	duration := os.Getenv("QUICKCULL_EXIF_HELPER_DURATION")
+	if duration == "" {
+		return
+	}
+	d, err := time.ParseDuration(duration)
+	if err != nil {
+		os.Exit(2)
+	}
+	time.Sleep(d)
+	os.Exit(0)
 }

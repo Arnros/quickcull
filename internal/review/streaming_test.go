@@ -27,14 +27,34 @@ func TestServerSearchStream(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// We use a local bus listener if we had a way to intercept s.broadcast
-	// For now we'll just test that it runs without crashing.
-	// In a real TDD we would mock the broadcaster.
+	var complete map[string]any
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == "search:complete" {
+			complete = data.(map[string]any)
+		}
+	})
+
 	srv.SearchStream(context.Background(), "vacation")
 
-	// Since SearchStream is synchronous in its loop (just broadcasts),
-	// we can't easily capture the broadcast without a mock bus.
-	// But the implementation is now there.
+	if complete == nil {
+		t.Fatal("expected search:complete event")
+	}
+	if got := complete["query"]; got != "vacation" {
+		t.Fatalf("query = %v, want vacation", got)
+	}
+	indices, ok := complete["indices"].([]int)
+	if !ok {
+		t.Fatalf("indices type = %T, want []int", complete["indices"])
+	}
+	state := srv.getState()
+	want := []int{
+		state.FindIndex("vacation_01.jpg"),
+		state.FindIndex("vacation_02.jpg"),
+	}
+	slices.Sort(want)
+	if !slices.Equal(indices, want) {
+		t.Fatalf("indices = %v, want %v for vacation files", indices, want)
+	}
 }
 
 // TestSearchStream_CancelStopsBroadcast locks in the P1-1 fix: a cancelled

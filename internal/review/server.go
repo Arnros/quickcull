@@ -28,21 +28,21 @@ type burstResult struct {
 //
 // Never acquire a higher-ranked lock while already holding a lower-ranked one.
 type Server struct {
-	stateMu        sync.RWMutex
-	state          *State
-	cacheDir       string
-	cache          *MediaCache
-	burstCache     sync.Map // int → *burstResult (nil if no burst)
-	ctx            context.Context
-	analysisSched  *analysisScheduler
-	analysisQueue  *AnalysisQueue
-	searchCancel   context.CancelFunc
-	searchMu       sync.Mutex
-	progressMu     sync.RWMutex
-	progressCur    int
-	progressTotal  int
-	thumbCur       int
-	thumbTotal     int
+	stateMu       sync.RWMutex
+	state         *State
+	cacheDir      string
+	cache         *MediaCache
+	burstCache    sync.Map // int → *burstResult (nil if no burst)
+	ctx           context.Context
+	analysisSched *analysisScheduler
+	analysisQueue *AnalysisQueue
+	searchCancel  context.CancelFunc
+	searchMu      sync.Mutex
+	progressMu    sync.RWMutex
+	progressCur   int
+	progressTotal int
+	thumbCur      int
+	thumbTotal    int
 
 	// v2 Event Sourcing State
 	appStateMu sync.RWMutex
@@ -258,7 +258,15 @@ func (s *Server) InvalidateSavedPositionCache() {
 
 // PrioritizeIndices pushes a batch of indices to the front of the analysis queue.
 func (s *Server) PrioritizeIndices(indices []int) {
+	state := s.getState()
+	if state == nil {
+		return
+	}
+	total := state.Len()
 	for _, idx := range indices {
+		if idx < 0 || idx >= total {
+			continue
+		}
 		s.analysisQueue.Push(idx, analysisStartupPriority)
 	}
 }

@@ -631,8 +631,7 @@ func TestResetMetadataEmitsSyncState(t *testing.T) {
 		defer mu.Unlock()
 		return syncState > 0
 	})
-	}
-
+}
 
 func waitForCondition(t *testing.T, message string, check func() bool) {
 	t.Helper()
@@ -769,11 +768,11 @@ func TestRestoreFromTrashViaApp(t *testing.T) {
 	if res.Index < 0 {
 		t.Errorf("index = %d, want non-negative", res.Index)
 	}
-	if _, err := os.Stat(filepath.Join(root, "a.jpg")); os.IsNotExist(err) {
-		t.Error("file missing from root after restore")
+	if _, err := os.Stat(filepath.Join(root, "a.jpg")); err != nil {
+		t.Fatalf("file missing from root after restore: %v", err)
 	}
-	if _, err := os.Stat(trashPath); err == nil {
-		t.Error("file still in .trash after restore")
+	if _, err := os.Stat(trashPath); !os.IsNotExist(err) {
+		t.Fatalf("trash path should be absent after restore, stat error: %v", err)
 	}
 }
 
@@ -789,16 +788,23 @@ func TestResetLabelsViaApp(t *testing.T) {
 	_, app, cleanup := setupPhysicalTest(t)
 	defer cleanup()
 
-	app.server.applyEvent(bus.Event{
+	if _, _, err := app.server.applyEvent(bus.Event{
 		Type:    bus.TypeCommandLabelPhoto,
 		Payload: bus.CommandLabelPhotoPayload{PhotoID: "a.jpg", Label: 3},
-	})
-	app.server.applyEvent(bus.Event{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := app.server.applyEvent(bus.Event{
 		Type:    bus.TypeCommandLabelPhoto,
 		Payload: bus.CommandLabelPhotoPayload{PhotoID: "b.jpg", Label: 5},
-	})
-	if app.server.appState.LabeledCount != 2 {
-		t.Fatalf("expected 2 labeled photos before reset, got %d", app.server.appState.LabeledCount)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.server.appStateMu.RLock()
+	beforeCount := app.server.appState.LabeledCount
+	app.server.appStateMu.RUnlock()
+	if beforeCount != 2 {
+		t.Fatalf("expected 2 labeled photos before reset, got %d", beforeCount)
 	}
 
 	if err := app.ResetLabels(); err != nil {
@@ -935,11 +941,20 @@ func TestGetAppStateReturnsSnapshot(t *testing.T) {
 	}
 
 	state.Root = "hacked"
+	state.VisibleOrder[0] = "hacked.jpg"
+	photo := state.Photos["a.jpg"]
+	photo.Label = 5
+	state.Photos["a.jpg"] = photo
 	server.appStateMu.RLock()
 	serverRoot := server.appState.Root
+	serverFirst := server.appState.VisibleOrder[0]
+	serverLabel := server.appState.Photos["a.jpg"].Label
 	server.appStateMu.RUnlock()
 	if serverRoot == "hacked" {
 		t.Fatal("GetAppState returned mutable reference to server state")
+	}
+	if serverFirst == "hacked.jpg" || serverLabel == 5 {
+		t.Fatalf("GetAppState leaked nested state: order=%q label=%d", serverFirst, serverLabel)
 	}
 	if len(state.Photos) != 2 {
 		t.Fatalf("photos map len = %d, want 2", len(state.Photos))
@@ -1016,8 +1031,8 @@ func TestExportFilesViaApp(t *testing.T) {
 		t.Fatalf("ExportFiles: %v", err)
 	}
 	waitForExport(t, app.server)
-	if _, err := os.Stat(filepath.Join(dest, "a.jpg")); os.IsNotExist(err) {
-		t.Fatalf("exported file missing from dest")
+	if _, err := os.Stat(filepath.Join(dest, "a.jpg")); err != nil {
+		t.Fatalf("exported file missing from dest: %v", err)
 	}
 }
 
@@ -1039,15 +1054,35 @@ func TestSavePositionViaApp(t *testing.T) {
 }
 
 func TestGetHistoryAndRemoveHistoryViaApp(t *testing.T) {
+	t.Setenv("QUICKCULL_TEST_CACHE_DIR", t.TempDir())
 	app := NewApp(NewServer())
+	first := filepath.Join(t.TempDir(), "first")
+	second := filepath.Join(t.TempDir(), "second")
+	if err := domain.AddToHistory(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := domain.AddToHistory(second); err != nil {
+		t.Fatal(err)
+	}
 	history, err := app.GetHistory()
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
-	if history == nil {
-		t.Fatal("GetHistory must return non-nil slice")
+	firstAbs, _ := filepath.Abs(first)
+	secondAbs, _ := filepath.Abs(second)
+	if !slices.Equal(history, []string{secondAbs, firstAbs}) {
+		t.Fatalf("history = %v", history)
 	}
-	_ = app.RemoveHistory("/nonexistent")
+	if err := app.RemoveHistory(first); err != nil {
+		t.Fatal(err)
+	}
+	history, err = app.GetHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(history, []string{secondAbs}) {
+		t.Fatalf("history after remove = %v", history)
+	}
 }
 
 func TestSearchStreamNewSearchCancelsOldViaApp(t *testing.T) {
@@ -1064,32 +1099,65 @@ func TestSearchStreamNewSearchCancelsOldViaApp(t *testing.T) {
 	app := &App{server: srv}
 	app.ctx = context.Background()
 
+	type searchEvent struct {
+		name  string
+		query string
+	}
 	var mu sync.Mutex
-	var resultsCount int
+	var events []searchEvent
+	firstResult := make(chan struct{}, 1)
+	secondComplete := make(chan map[string]any, 1)
 	srv.SetBroadcastHook(func(name string, data any) {
-		if name == "search:results" {
-			mu.Lock()
-			resultsCount++
-			mu.Unlock()
+		if name != "search:results" && name != "search:complete" {
+			return
+		}
+		payload := data.(map[string]any)
+		query, _ := payload["query"].(string)
+		mu.Lock()
+		events = append(events, searchEvent{name: name, query: query})
+		mu.Unlock()
+		if name == "search:results" && query == "vac" {
+			select {
+			case firstResult <- struct{}{}:
+			default:
+			}
+		}
+		if name == "search:complete" && query == "vac_0001" {
+			select {
+			case secondComplete <- payload:
+			default:
+			}
 		}
 	})
 
 	app.SearchStream("vac")
-	time.Sleep(30 * time.Millisecond)
-
-	mu.Lock()
-	before := resultsCount
-	mu.Unlock()
+	select {
+	case <-firstResult:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first search produced no streamed results")
+	}
 
 	app.SearchStream("vac_0001")
-	time.Sleep(50 * time.Millisecond)
-
 	mu.Lock()
-	after := resultsCount
+	boundary := len(events)
 	mu.Unlock()
-
-	if after <= before {
-		t.Logf("new search may not have emitted more results in time window (before=%d, after=%d)", before, after)
+	var payload map[string]any
+	select {
+	case payload = <-secondComplete:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second search did not complete")
+	}
+	wantIndex := srv.getState().FindIndex("vac_0001.jpg")
+	if indices, ok := payload["indices"].([]int); !ok || !slices.Equal(indices, []int{wantIndex}) {
+		t.Fatalf("second search indices = %#v, want [%d]", payload["indices"], wantIndex)
+	}
+	time.Sleep(30 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	for _, event := range events[boundary:] {
+		if event.query == "vac" {
+			t.Fatalf("cancelled search emitted %s after replacement started", event.name)
+		}
 	}
 }
 
@@ -1097,15 +1165,27 @@ func TestPrioritizeIndicesValidAndOutOfBounds(t *testing.T) {
 	app, server, _ := newAppWithState(t, []string{"a.jpg", "b.jpg", "c.jpg"})
 	server.analysisQueue.Reset()
 
-	app.PrioritizeIndices([]int{0, 2, 9999})
+	app.PrioritizeIndices([]int{-1, 0, 2, 9999})
 	app.PrioritizeIndices(nil)
 	app.PrioritizeIndices([]int{})
 
 	interactive, warm, bulk := server.analysisQueue.DepthByTier()
-	if interactive+warm+bulk == 0 {
-		t.Fatal("expected indices to be queued")
+	if got := interactive + warm + bulk; got != 2 {
+		t.Fatalf("queued item count = %d, want 2 valid indices", got)
 	}
 	if server.analysisQueue.HasUrgentTask() {
 		t.Fatal("prioritize should not create urgent tasks")
+	}
+	got := make([]int, 0, 2)
+	for range 2 {
+		index, _, ok := server.analysisQueue.Pop()
+		if !ok {
+			t.Fatal("expected queued priority item")
+		}
+		got = append(got, index)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, []int{0, 2}) {
+		t.Fatalf("queued indices = %v, want [0 2]", got)
 	}
 }

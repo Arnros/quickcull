@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -138,12 +139,23 @@ func TestExiftoolPath(t *testing.T) {
 		t.Errorf("ExiftoolPath() = %q, expected %q", got, dummyExe)
 	}
 
+	// Make fallback resolution deterministic and independent of the host.
+	fallbackName := defaultExiftoolBinary
+	if runtime.GOOS == "windows" {
+		fallbackName = "exiftool.exe"
+	}
+	fallbackExe := filepath.Join(t.TempDir(), fallbackName)
+	if err := os.WriteFile(fallbackExe, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(fallbackExe))
+
 	// Case 2: Configured path does not exist or is insecure: falls back.
 	configMu.Lock()
 	config = Config{ExiftoolPath: "/some/custom/path/exiftool"}
 	configMu.Unlock()
-	if got := ExiftoolPath(); got == "/some/custom/path/exiftool" {
-		t.Errorf("ExiftoolPath() accepted non-existent path")
+	if got := ExiftoolPath(); got != fallbackExe {
+		t.Errorf("ExiftoolPath() fallback = %q, expected %q", got, fallbackExe)
 	}
 
 	// Case 3: Configured path is empty, falls back to PATH lookup or auto-detection
@@ -151,7 +163,7 @@ func TestExiftoolPath(t *testing.T) {
 	config = Config{ExiftoolPath: ""}
 	configMu.Unlock()
 	got := ExiftoolPath()
-	if got == "" {
-		t.Error("ExiftoolPath() returned empty string for empty config path")
+	if got != fallbackExe {
+		t.Errorf("ExiftoolPath() empty-config fallback = %q, expected %q", got, fallbackExe)
 	}
 }

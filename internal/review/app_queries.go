@@ -31,7 +31,7 @@ func (a *App) GetAppState() (AppState, error) {
 	if a.server.appState == nil {
 		return AppState{}, nil
 	}
-	return *a.server.appState, nil
+	return a.server.appState.Clone(true), nil
 }
 
 // GetStats returns current folder statistics.
