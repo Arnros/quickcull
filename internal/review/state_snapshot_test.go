@@ -147,3 +147,56 @@ func TestAppStateDTO_JSONSerializationContract(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildSyncSnapshotSelective_FiltersToAffectedPhotos(t *testing.T) {
+	state := AppState{
+		Root:         "/tmp",
+		Photos:       map[string]Photo{"a.jpg": {ID: "a.jpg", IsStarred: true}, "b.jpg": {ID: "b.jpg"}, "c.jpg": {ID: "c.jpg"}},
+		VisibleOrder: []string{"a.jpg", "b.jpg", "c.jpg"},
+	}
+	dto := BuildSyncSnapshotSelective(state, true, []string{"a.jpg", "c.jpg"})
+
+	if !dto.IsPartial {
+		t.Error("expected IsPartial=true")
+	}
+	if len(dto.Photos) != 2 {
+		t.Fatalf("expected 2 photos in selective snapshot, got %d", len(dto.Photos))
+	}
+	if _, ok := dto.Photos["b.jpg"]; ok {
+		t.Error("BuildSyncSnapshotSelective must exclude unlisted photos")
+	}
+	if !dto.Photos["a.jpg"].IsStarred {
+		t.Error("a.jpg metadata must be preserved in selective snapshot")
+	}
+	if len(dto.VisibleOrder) != 3 {
+		t.Errorf("VisibleOrder must not be filtered, got %d", len(dto.VisibleOrder))
+	}
+}
+
+func TestBroadcastAppStateSelective_EmitsSyncState(t *testing.T) {
+	srv := NewServer()
+	srv.appState = &AppState{
+		Root:         "/tmp",
+		Photos:       map[string]Photo{"a.jpg": {ID: "a.jpg", IsStarred: true}},
+		VisibleOrder: []string{"a.jpg"},
+	}
+
+	var got AppStateDTO
+	srv.SetBroadcastHook(func(name string, data any) {
+		if name == eventSyncState {
+			got = data.(AppStateDTO)
+		}
+	})
+
+	srv.broadcastAppStateSelective(srv.appState, true, []string{"a.jpg"})
+
+	if got.Root != "/tmp" {
+		t.Errorf("expected root /tmp, got %q", got.Root)
+	}
+	if !got.IsPartial {
+		t.Errorf("expected IsPartial=true")
+	}
+	if len(got.Photos) != 1 {
+		t.Errorf("expected 1 photo, got %d", len(got.Photos))
+	}
+}

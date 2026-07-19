@@ -91,6 +91,10 @@ func (s *Server) loadStateBootstrap(root string) (*loadPipeline, error) {
 		s.appStateMu.Unlock()
 	}
 
+	s.appStateMu.Lock()
+	s.appState.photos = newPhotoStore(s.appState.Photos)
+	s.appStateMu.Unlock()
+
 	// Standardize on SyncState (structural)
 	s.SyncFullState()
 
@@ -240,9 +244,9 @@ func (s *Server) loadStateFinalize(p *loadPipeline, finalCount int) error {
 
 	s.appState.VisibleOrder = p.newState.files
 	s.appState.TrashedCount = p.newState.trashedCount
-	s.appState.RecalculateCounts()
 	s.appState.photos = newPhotoStore(s.appState.Photos)
 	s.appState.Photos = nil
+	s.appState.RecalculateCounts()
 	s.appStateMu.Unlock()
 
 	s.progressMu.Lock()

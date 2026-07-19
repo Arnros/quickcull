@@ -357,6 +357,110 @@ func TestReduceHistoryBoundary(t *testing.T) {
 	}
 }
 
+func TestPhotoStoreSnapshot_FallbackFromPhotosMap(t *testing.T) {
+	photos := map[string]Photo{
+		"a.jpg": {ID: "a.jpg", IsStarred: true},
+		"b.jpg": {ID: "b.jpg"},
+	}
+	state := &AppState{Photos: photos}
+
+	// photo(missing) returns false
+	if _, ok := state.photo("missing.jpg"); ok {
+		t.Error("expected false for missing photo")
+	}
+
+	// photo(existing) returns the correct value
+	p, ok := state.photo("a.jpg")
+	if !ok || !p.IsStarred {
+		t.Error("expected starred photo a.jpg")
+	}
+
+	// photoCount returns the correct count even when s.photos is nil
+	if n := state.photoCount(); n != 2 {
+		t.Errorf("photoCount = %d, want 2", n)
+	}
+
+	// rangePhotos visits all photos exactly once
+	visited := make(map[string]bool)
+	state.rangePhotos(func(id string, _ Photo) bool {
+		visited[id] = true
+		return true
+	})
+	if len(visited) != 2 || !visited["a.jpg"] || !visited["b.jpg"] {
+		t.Errorf("rangePhotos missed photos: %v", visited)
+	}
+}
+
+func TestPhotoStoreSnapshot_WithPhotoStore(t *testing.T) {
+	photos := map[string]Photo{
+		"a.jpg": {ID: "a.jpg", IsStarred: true},
+		"b.jpg": {ID: "b.jpg"},
+	}
+	state := &AppState{photos: newPhotoStore(photos)}
+
+	// Must prefer s.photos over s.Photos even if both are set
+	state.Photos = map[string]Photo{"a.jpg": {ID: "a.jpg", IsStarred: false}}
+
+	if p, ok := state.photo("a.jpg"); !ok || !p.IsStarred {
+		t.Error("expected s.photos to take priority over s.Photos")
+	}
+}
+
+func TestRecalculateCounts_WithOnlyPhotosMap(t *testing.T) {
+	// The bug: when s.photos is nil, photo() creates a new photoStore from
+	// s.Photos on EVERY call. RecalculateCounts must handle this correctly
+	// (not O(n²), but at minimum produce the right counts).
+	photos := map[string]Photo{
+		"a.jpg": {ID: "a.jpg", IsStarred: true, Label: 3},
+		"b.jpg": {ID: "b.jpg"},
+		"c.jpg": {ID: "c.jpg", Label: 1, Rotation: 90},
+	}
+	state := &AppState{
+		Photos:       photos,
+		VisibleOrder: []string{"a.jpg", "b.jpg", "c.jpg"},
+	}
+
+	state.RecalculateCounts()
+
+	if state.StarredCount != 1 {
+		t.Errorf("StarredCount = %d, want 1", state.StarredCount)
+	}
+	if state.LabeledCount != 2 {
+		t.Errorf("LabeledCount = %d, want 2", state.LabeledCount)
+	}
+	if state.RotatedCount != 1 {
+		t.Errorf("RotatedCount = %d, want 1", state.RotatedCount)
+	}
+	if state.photos != nil {
+		t.Errorf("RecalculateCounts must not set s.photos")
+	}
+}
+
+func TestRecalculateCounts_WithPhotoStore(t *testing.T) {
+	// The efficient path: s.photos is set, photo() uses it directly.
+	photos := map[string]Photo{
+		"a.jpg": {ID: "a.jpg", IsStarred: true, Label: 3},
+		"b.jpg": {ID: "b.jpg"},
+		"c.jpg": {ID: "c.jpg", Label: 1, Rotation: 90, IsTrashed: true},
+	}
+	state := &AppState{
+		photos:       newPhotoStore(photos),
+		VisibleOrder: []string{"a.jpg", "b.jpg", "c.jpg"},
+	}
+
+	state.RecalculateCounts()
+
+	if state.StarredCount != 1 {
+		t.Errorf("StarredCount = %d, want 1", state.StarredCount)
+	}
+	if state.LabeledCount != 1 {
+		t.Errorf("LabeledCount = %d, want 1 (c.jpg is trashed)", state.LabeledCount)
+	}
+	if state.RotatedCount != 0 {
+		t.Errorf("RotatedCount = %d, want 0 (c.jpg is trashed)", state.RotatedCount)
+	}
+}
+
 func TestReduceUndo(t *testing.T) {
 	initialState := AppState{
 		Photos: map[string]Photo{

@@ -1,6 +1,7 @@
 package review
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"quickcull/internal/bus"
 	"quickcull/internal/domain"
 	"quickcull/internal/persistence"
 )
@@ -182,5 +184,128 @@ func TestLoadState_SnapshotDisabled_UsesLegacyFullScanFlow(t *testing.T) {
 	wantFinal := []string{"a.jpg", "b.jpg"}
 	if !slices.Equal(srv.appState.VisibleOrder, wantFinal) {
 		t.Fatalf("unexpected final order: got %v want %v", srv.appState.VisibleOrder, wantFinal)
+	}
+}
+
+func TestReconcileScannedFiles_PreservesMetadataForSurvivingPhotos(t *testing.T) {
+	root := t.TempDir()
+	writeTinyJPEG(t, root+"/a.jpg")
+	writeTinyJPEG(t, root+"/b.jpg")
+	writeTinyJPEG(t, root+"/c.jpg")
+
+	srv := NewServer()
+	setScanFilesForTest(t, func(_ string, filesChan chan<- string) error {
+		defer close(filesChan)
+		filesChan <- "a.jpg"
+		filesChan <- "b.jpg"
+		filesChan <- "c.jpg"
+		return nil
+	})
+
+	if err := srv.LoadState(root); err != nil {
+		t.Fatalf("LoadState failed: %v", err)
+	}
+
+	// Apply metadata to a.jpg and b.jpg
+	if _, _, err := srv.applyEvent(bus.Event{
+		Type: bus.TypeCommandToggleStar,
+		Payload: bus.CommandToggleStarPayload{PhotoID: "a.jpg", Starred: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := srv.applyEvent(bus.Event{
+		Type: bus.TypeCommandLabelPhoto,
+		Payload: bus.CommandLabelPhotoPayload{PhotoID: "b.jpg", Label: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate refresh: b.jpg removed, d.jpg added
+	srv.ReconcileScannedFiles([]string{"a.jpg", "c.jpg", "d.jpg"})
+
+	// a.jpg must keep its star
+	p, ok := srv.appState.photo("a.jpg")
+	if !ok || !p.IsStarred {
+		t.Error("a.jpg must preserve IsStarred after reconcile")
+	}
+	// b.jpg is gone
+	if _, ok := srv.appState.photo("b.jpg"); ok {
+		t.Error("b.jpg must be removed after reconcile")
+	}
+	// c.jpg must still exist with default metadata
+	if _, ok := srv.appState.photo("c.jpg"); !ok {
+		t.Error("c.jpg must survive reconcile")
+	}
+	// d.jpg is new, must exist with empty metadata
+	p, ok = srv.appState.photo("d.jpg")
+	if !ok {
+		t.Fatal("d.jpg must be added after reconcile")
+	}
+	if p.IsStarred || p.Label != 0 {
+		t.Error("d.jpg must start with empty metadata")
+	}
+}
+
+func TestLoadState_RestoresPersistedUndoOnBootstrap(t *testing.T) {
+	store, err := persistence.NewMetadataStore(filepath.Join(t.TempDir(), "metadata.db"))
+	if err != nil {
+		t.Fatalf("failed to create metadata store: %v", err)
+	}
+	defer store.Close()
+
+	root := t.TempDir()
+	writeTinyJPEG(t, root+"/a.jpg")
+	absRoot, _ := filepath.Abs(root)
+	folderID := domain.GetFolderID(absRoot)
+
+	// Pre-seed history
+	seedHistory := []bus.Event{
+		{Type: bus.TypeCommandToggleStar, Payload: bus.CommandToggleStarPayload{PhotoID: "a.jpg", Starred: true, OldStarred: false}},
+	}
+	historyData, _ := json.Marshal(seedHistory)
+	if err := store.SaveHistory(folderID, historyData); err != nil {
+		t.Fatalf("SaveHistory failed: %v", err)
+	}
+
+	// Pre-seed metadata
+	if err := store.SaveFolderMetadata(folderID, map[string]persistence.PhotoMetadata{
+		"a.jpg": {IsStarred: true},
+	}); err != nil {
+		t.Fatalf("SaveFolderMetadata failed: %v", err)
+	}
+
+	srv := NewServer()
+	srv.persistence = store
+
+	startupSnapshotOverride.Store(srv, false)
+	t.Cleanup(func() { startupSnapshotOverride.Delete(srv) })
+
+	setScanFilesForTest(t, func(_ string, filesChan chan<- string) error {
+		defer close(filesChan)
+		filesChan <- "a.jpg"
+		return nil
+	})
+
+	if err := srv.LoadState(root); err != nil {
+		t.Fatalf("LoadState failed: %v", err)
+	}
+
+	// Undo must be available
+	srv.appStateMu.RLock()
+	undoLen := srv.appState.UndoLen
+	rootPath := srv.appState.Root
+	srv.appStateMu.RUnlock()
+
+	if undoLen != 1 {
+		t.Errorf("Expected 1 undo slot, got %d", undoLen)
+	}
+	if rootPath == "" {
+		t.Fatal("root must be set")
+	}
+
+	// Star must be restored from persisted metadata
+	p, ok := srv.appState.photo("a.jpg")
+	if !ok || !p.IsStarred {
+		t.Error("a.jpg must be starred from persisted metadata")
 	}
 }
