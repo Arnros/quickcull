@@ -14,7 +14,7 @@ func (a *App) executeBatchAction(paths []string, actionType bus.EventType, paylo
 	if a.server.appState != nil {
 		for _, rel := range paths {
 			normalized := strings.ReplaceAll(rel, "\\", "/")
-			if p, ok := a.server.appState.Photos[normalized]; ok {
+			if p, ok := a.server.appState.photo(normalized); ok {
 				currentPhotos[normalized] = p
 			}
 		}

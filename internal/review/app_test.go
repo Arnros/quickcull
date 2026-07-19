@@ -394,7 +394,7 @@ func TestBatchStarForcesStateOnMixedSelection(t *testing.T) {
 	waitForCondition(t, "a.jpg should be starred", func() bool {
 		server.appStateMu.RLock()
 		defer server.appStateMu.RUnlock()
-		return server.appState != nil && server.appState.Photos["a.jpg"].IsStarred
+		return server.appState != nil && server.appState.materializePhotos()["a.jpg"].IsStarred
 	})
 
 	// Batch force-star all three (a already starred, b and c not).
@@ -407,15 +407,15 @@ func TestBatchStarForcesStateOnMixedSelection(t *testing.T) {
 		if server.appState == nil {
 			return false
 		}
-		return server.appState.Photos["a.jpg"].IsStarred &&
-			server.appState.Photos["b.jpg"].IsStarred &&
-			server.appState.Photos["c.jpg"].IsStarred
+		return server.appState.materializePhotos()["a.jpg"].IsStarred &&
+			server.appState.materializePhotos()["b.jpg"].IsStarred &&
+			server.appState.materializePhotos()["c.jpg"].IsStarred
 	})
 
 	server.appStateMu.RLock()
 	defer server.appStateMu.RUnlock()
 	for _, f := range files {
-		if !server.appState.Photos[f].IsStarred {
+		if !server.appState.materializePhotos()[f].IsStarred {
 			t.Errorf("%s should be starred after force-star batch", f)
 		}
 	}
@@ -436,7 +436,7 @@ func TestBatchLabelForcesStateOnMixedSelection(t *testing.T) {
 	waitForCondition(t, "b.jpg should have label 2", func() bool {
 		server.appStateMu.RLock()
 		defer server.appStateMu.RUnlock()
-		return server.appState != nil && server.appState.Photos["b.jpg"].Label == 2
+		return server.appState != nil && server.appState.materializePhotos()["b.jpg"].Label == 2
 	})
 
 	if _, err := app.SetLabel(0, "", []string{"a.jpg", "b.jpg", "c.jpg"}, 2); err != nil {
@@ -448,16 +448,16 @@ func TestBatchLabelForcesStateOnMixedSelection(t *testing.T) {
 		if server.appState == nil {
 			return false
 		}
-		return server.appState.Photos["a.jpg"].Label == 2 &&
-			server.appState.Photos["b.jpg"].Label == 2 &&
-			server.appState.Photos["c.jpg"].Label == 2
+		return server.appState.materializePhotos()["a.jpg"].Label == 2 &&
+			server.appState.materializePhotos()["b.jpg"].Label == 2 &&
+			server.appState.materializePhotos()["c.jpg"].Label == 2
 	})
 
 	server.appStateMu.RLock()
 	defer server.appStateMu.RUnlock()
 	for _, f := range files {
-		if server.appState.Photos[f].Label != 2 {
-			t.Errorf("%s label = %d, want 2", f, server.appState.Photos[f].Label)
+		if server.appState.materializePhotos()[f].Label != 2 {
+			t.Errorf("%s label = %d, want 2", f, server.appState.materializePhotos()[f].Label)
 		}
 	}
 	if server.appState.LabeledCount != 3 {
@@ -480,9 +480,9 @@ func TestBatchUndoRevertsAllPhotosAtOnce(t *testing.T) {
 		if server.appState == nil {
 			return false
 		}
-		return server.appState.Photos["a.jpg"].IsStarred &&
-			server.appState.Photos["b.jpg"].IsStarred &&
-			server.appState.Photos["c.jpg"].IsStarred
+		return server.appState.materializePhotos()["a.jpg"].IsStarred &&
+			server.appState.materializePhotos()["b.jpg"].IsStarred &&
+			server.appState.materializePhotos()["c.jpg"].IsStarred
 	})
 
 	// Verify history has exactly 1 entry (the batch), not 3.
@@ -502,15 +502,15 @@ func TestBatchUndoRevertsAllPhotosAtOnce(t *testing.T) {
 		if server.appState == nil {
 			return false
 		}
-		return !server.appState.Photos["a.jpg"].IsStarred &&
-			!server.appState.Photos["b.jpg"].IsStarred &&
-			!server.appState.Photos["c.jpg"].IsStarred
+		return !server.appState.materializePhotos()["a.jpg"].IsStarred &&
+			!server.appState.materializePhotos()["b.jpg"].IsStarred &&
+			!server.appState.materializePhotos()["c.jpg"].IsStarred
 	})
 
 	server.appStateMu.RLock()
 	defer server.appStateMu.RUnlock()
 	for _, f := range files {
-		if server.appState.Photos[f].IsStarred {
+		if server.appState.materializePhotos()[f].IsStarred {
 			t.Errorf("%s should not be starred after undo", f)
 		}
 	}
@@ -535,8 +535,8 @@ func TestBatchActionsNormalizeWindowsPaths(t *testing.T) {
 		if server.appState == nil {
 			return false
 		}
-		return server.appState.Photos["a.jpg"].IsStarred &&
-			server.appState.Photos["sub/b.jpg"].IsStarred
+		return server.appState.materializePhotos()["a.jpg"].IsStarred &&
+			server.appState.materializePhotos()["sub/b.jpg"].IsStarred
 	})
 
 	if _, err := app.SetLabel(0, "", paths, 3); err != nil {
@@ -548,8 +548,8 @@ func TestBatchActionsNormalizeWindowsPaths(t *testing.T) {
 		if server.appState == nil {
 			return false
 		}
-		return server.appState.Photos["a.jpg"].Label == 3 &&
-			server.appState.Photos["sub/b.jpg"].Label == 3
+		return server.appState.materializePhotos()["a.jpg"].Label == 3 &&
+			server.appState.materializePhotos()["sub/b.jpg"].Label == 3
 	})
 }
 
@@ -818,7 +818,7 @@ func TestResetLabelsViaApp(t *testing.T) {
 		t.Errorf("labeled count = %d, want 0", app.server.appState.LabeledCount)
 	}
 	for _, id := range []string{"a.jpg", "b.jpg"} {
-		if p := app.server.appState.Photos[id]; p.Label != 0 {
+		if p := app.server.appState.materializePhotos()[id]; p.Label != 0 {
 			t.Errorf("%s label = %d, want 0", id, p.Label)
 		}
 	}
@@ -893,7 +893,7 @@ func TestApplyRotationUnsupportedFormat(t *testing.T) {
 	waitForCondition(t, "rotation set", func() bool {
 		srv.appStateMu.RLock()
 		defer srv.appStateMu.RUnlock()
-		return srv.appState != nil && srv.appState.Photos[name].Rotation != 0
+		return srv.appState != nil && srv.appState.materializePhotos()[name].Rotation != 0
 	})
 
 	if err := app.ApplyRotation(0, name); err != domain.ErrExifWriteUnsupported {
@@ -923,7 +923,7 @@ func TestApplyRotationFailurePreservesVisualRotation(t *testing.T) {
 		t.Fatalf("ApplyRotation error = %v, want ErrExiftoolApplyFailed", err)
 	}
 	app.server.appStateMu.RLock()
-	rotation := app.server.appState.Photos["a.jpg"].Rotation
+	rotation := app.server.appState.materializePhotos()["a.jpg"].Rotation
 	app.server.appStateMu.RUnlock()
 	if rotation != 90 {
 		t.Fatalf("visual rotation = %d after EXIF failure, want 90", rotation)
@@ -945,11 +945,12 @@ func TestSetLabelRejectsOutOfRangeValues(t *testing.T) {
 			}
 			server.appStateMu.RLock()
 			defer server.appStateMu.RUnlock()
-			for id, photo := range server.appState.Photos {
+			server.appState.rangePhotos(func(id string, photo Photo) bool {
 				if photo.Label != 0 {
 					t.Fatalf("%s label changed to %d", id, photo.Label)
 				}
-			}
+				return true
+			})
 		})
 	}
 }
@@ -962,7 +963,7 @@ func TestRotateRejectsInvalidDirectionsIncludingReset(t *testing.T) {
 				t.Fatalf("Rotate(%q) error = %v, want ErrInvalidRotationDir", direction, err)
 			}
 			server.appStateMu.RLock()
-			rotation := server.appState.Photos["a.jpg"].Rotation
+			rotation := server.appState.materializePhotos()["a.jpg"].Rotation
 			server.appStateMu.RUnlock()
 			if rotation != 0 {
 				t.Fatalf("rotation changed to %d", rotation)
@@ -1129,7 +1130,7 @@ func TestBatchTrashPartialFailureKeepsFailedPhotoCoherent(t *testing.T) {
 	}
 	server.appStateMu.RLock()
 	order := append([]string(nil), server.appState.VisibleOrder...)
-	_, retained := server.appState.Photos["locked/c.jpg"]
+	_, retained := server.appState.materializePhotos()["locked/c.jpg"]
 	server.appStateMu.RUnlock()
 	if !slices.Equal(order, []string{"locked/c.jpg"}) || !retained {
 		t.Fatalf("logical state lost failed photo: order=%v retained=%v", order, retained)
@@ -1183,7 +1184,7 @@ func TestTrashConcurrentWithRefreshKeepsStateCoherent(t *testing.T) {
 
 	server.appStateMu.RLock()
 	order := append([]string(nil), server.appState.VisibleOrder...)
-	trashedPhoto, retainedForUndo := server.appState.Photos["b.jpg"]
+	trashedPhoto, retainedForUndo := server.appState.materializePhotos()["b.jpg"]
 	server.appStateMu.RUnlock()
 	if !slices.Equal(order, []string{"a.jpg", "c.jpg"}) || !retainedForUndo || !trashedPhoto.IsTrashed {
 		t.Fatalf("incoherent state after concurrent trash/refresh: order=%v retained=%v photo=%+v", order, retainedForUndo, trashedPhoto)
@@ -1235,7 +1236,7 @@ func TestStartupInitializesPersistenceAndEventEngine(t *testing.T) {
 	waitForCondition(t, "event engine label", func() bool {
 		server.appStateMu.RLock()
 		defer server.appStateMu.RUnlock()
-		return server.appState != nil && server.appState.Photos["a.jpg"].Label == 2
+		return server.appState != nil && server.appState.materializePhotos()["a.jpg"].Label == 2
 	})
 }
 
@@ -1281,13 +1282,13 @@ func TestGetAppStateReturnsSnapshot(t *testing.T) {
 
 	state.Root = "hacked"
 	state.VisibleOrder[0] = "hacked.jpg"
-	photo := state.Photos["a.jpg"]
+	photo := state.materializePhotos()["a.jpg"]
 	photo.Label = 5
 	state.Photos["a.jpg"] = photo
 	server.appStateMu.RLock()
 	serverRoot := server.appState.Root
 	serverFirst := server.appState.VisibleOrder[0]
-	serverLabel := server.appState.Photos["a.jpg"].Label
+	serverLabel := server.appState.materializePhotos()["a.jpg"].Label
 	server.appStateMu.RUnlock()
 	if serverRoot == "hacked" {
 		t.Fatal("GetAppState returned mutable reference to server state")
@@ -1295,8 +1296,8 @@ func TestGetAppStateReturnsSnapshot(t *testing.T) {
 	if serverFirst == "hacked.jpg" || serverLabel == 5 {
 		t.Fatalf("GetAppState leaked nested state: order=%q label=%d", serverFirst, serverLabel)
 	}
-	if len(state.Photos) != 2 {
-		t.Fatalf("photos map len = %d, want 2", len(state.Photos))
+	if state.photoCount() != 2 {
+		t.Fatalf("photos map len = %d, want 2", state.photoCount())
 	}
 }
 
@@ -1306,7 +1307,7 @@ func TestGetAppStateNoFolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAppState with no state: %v", err)
 	}
-	if len(state.VisibleOrder) != 0 || len(state.Photos) != 0 {
+	if len(state.VisibleOrder) != 0 || state.photoCount() != 0 {
 		t.Errorf("expected empty state, got %+v", state)
 	}
 }

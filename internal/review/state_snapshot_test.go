@@ -51,7 +51,7 @@ func TestSyncFullState_EmitsImmutableSnapshot(t *testing.T) {
 
 	// Mutate live app state after the broadcast and verify payload remains unchanged.
 	srv.appStateMu.Lock()
-	mutated := srv.appState.Photos["a.jpg"]
+	mutated := srv.appState.materializePhotos()["a.jpg"]
 	mutated.IsStarred = true
 	srv.appState.Photos["a.jpg"] = mutated
 	srv.appState.VisibleOrder[0] = "mutated.jpg"
@@ -103,7 +103,7 @@ func TestSyncFullStateSnapshot_BuildSyncSnapshotDeepCopy(t *testing.T) {
 	}
 
 	// Verify deep copy of Photos and VisibleOrder
-	photo := initial.Photos["x.jpg"]
+	photo := initial.materializePhotos()["x.jpg"]
 	photo.Label = 7
 	initial.Photos["x.jpg"] = photo
 	initial.VisibleOrder[0] = "changed.jpg"

@@ -115,17 +115,17 @@ func TestServerLoadStateHydratesPersistedMetadataAndRecalculatesCountsIgnoringTr
 		t.Fatalf("LoadState failed: %v", err)
 	}
 
-	starPhoto := srv.appState.Photos["keep-star.jpg"]
+	starPhoto := srv.appState.materializePhotos()["keep-star.jpg"]
 	if !starPhoto.IsStarred || starPhoto.Rotation != 90 || starPhoto.Label != 0 || starPhoto.IsTrashed {
 		t.Fatalf("unexpected hydrated metadata for keep-star.jpg: %+v", starPhoto)
 	}
 
-	labelPhoto := srv.appState.Photos["keep-label.jpg"]
+	labelPhoto := srv.appState.materializePhotos()["keep-label.jpg"]
 	if labelPhoto.IsStarred || labelPhoto.Rotation != 180 || labelPhoto.Label != 4 || labelPhoto.IsTrashed {
 		t.Fatalf("unexpected hydrated metadata for keep-label.jpg: %+v", labelPhoto)
 	}
 
-	trashedPhoto := srv.appState.Photos["trashed-star-label.jpg"]
+	trashedPhoto := srv.appState.materializePhotos()["trashed-star-label.jpg"]
 	if !trashedPhoto.IsStarred || trashedPhoto.Rotation != 270 || trashedPhoto.Label != 7 || !trashedPhoto.IsTrashed {
 		t.Fatalf("unexpected hydrated metadata for trashed-star-label.jpg: %+v", trashedPhoto)
 	}
@@ -159,17 +159,17 @@ func TestServerLoadStateIncludesScannedFilesMissingFromPersistenceAndKeepsVisibl
 		t.Fatalf("LoadState failed: %v", err)
 	}
 
-	if _, ok := srv.appState.Photos["b.jpg"]; !ok {
+	if _, ok := srv.appState.materializePhotos()["b.jpg"]; !ok {
 		t.Fatal("scanned file b.jpg missing from Photos")
 	}
-	if _, ok := srv.appState.Photos["sub/c.jpg"]; !ok {
+	if _, ok := srv.appState.materializePhotos()["sub/c.jpg"]; !ok {
 		t.Fatal("scanned file sub/c.jpg missing from Photos")
 	}
-	if _, ok := srv.appState.Photos["missing.jpg"]; !ok {
+	if _, ok := srv.appState.materializePhotos()["missing.jpg"]; !ok {
 		t.Fatal("persisted file missing.jpg should still be present in Photos")
 	}
 
-	b := srv.appState.Photos["b.jpg"]
+	b := srv.appState.materializePhotos()["b.jpg"]
 	if b.IsStarred || b.Label != 0 || b.Rotation != 0 || b.IsTrashed {
 		t.Fatalf("scanned file b.jpg should have default hydrated values, got %+v", b)
 	}

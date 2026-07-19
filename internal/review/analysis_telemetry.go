@@ -2,7 +2,6 @@ package review
 
 import (
 	"context"
-	"log/slog"
 	"quickcull/internal/utils"
 	"runtime"
 	"sort"
@@ -21,13 +20,39 @@ func (s *Server) startGCWatchdog(ctx context.Context) {
 			case <-ticker.C:
 				var m runtime.MemStats
 				runtime.ReadMemStats(&m)
-				if m.HeapAlloc > highMemoryThreshold {
-					slog.Info("High memory detected, forcing GC", "heap_mb", m.HeapAlloc/1024/1024)
+				gcStartedAt := time.Now()
+				forceGCIfNeeded(m.HeapAlloc/1024/1024, highMemoryThreshold/1024/1024, func() uint64 {
 					runtime.GC()
-				}
+					var after runtime.MemStats
+					runtime.ReadMemStats(&after)
+					return after.HeapAlloc / 1024 / 1024
+				}, func() time.Duration { return time.Since(gcStartedAt) })
 			}
 		}
 	})
+}
+
+func forceGCIfNeeded(heapBeforeMB, thresholdMB uint64, collect func() uint64, elapsed func() time.Duration) bool {
+	if heapBeforeMB <= thresholdMB {
+		return false
+	}
+	heapAfterMB := collect()
+	logForcedGCSummary(heapBeforeMB, heapAfterMB, thresholdMB, elapsed())
+	return true
+}
+
+func logForcedGCSummary(heapBeforeMB, heapAfterMB, thresholdMB uint64, duration time.Duration) {
+	reclaimedMB := uint64(0)
+	if heapAfterMB < heapBeforeMB {
+		reclaimedMB = heapBeforeMB - heapAfterMB
+	}
+	utils.LogAnalysis("GC watchdog: forced collection summary",
+		"heap_before_mb", heapBeforeMB,
+		"heap_after_mb", heapAfterMB,
+		"reclaimed_mb", reclaimedMB,
+		"threshold_mb", thresholdMB,
+		"duration_ms", duration.Milliseconds(),
+	)
 }
 
 func (s *Server) emitProgress(currentProcessed int, force bool, lastEmitAt *time.Time) {

@@ -191,31 +191,61 @@ func (s *State) Trash(index int) (int, error) {
 // I/O is performed outside the state lock so navigation stays responsive even
 // on slow/networked volumes or large batches.
 func (s *State) TrashMultiplePaths(paths []string) (int, error) {
+	count, _, err := s.TrashMultiplePathsDetailed(paths)
+	return count, err
+}
+
+// TrashMultiplePathsDetailed moves tracked paths to trash and reports precisely
+// which paths moved. It batches the in-memory removal into one index rebuild.
+func (s *State) TrashMultiplePathsDetailed(paths []string) (int, []string, error) {
 	// Snapshot which paths are currently tracked.
 	s.mu.RLock()
 	root := s.root
 	tracked := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
 	for _, relPath := range paths {
-		if s.findIndexLocked(relPath) >= 0 {
+		if _, duplicate := seen[relPath]; !duplicate && s.findIndexLocked(relPath) >= 0 {
 			tracked = append(tracked, relPath)
+			seen[relPath] = struct{}{}
 		}
 	}
 	s.mu.RUnlock()
 
+	moved := make([]string, 0, len(tracked))
 	for _, relPath := range tracked {
 		if err := trashFile(root, relPath); err != nil {
 			slog.Warn("TrashMultiplePaths: failed to move file to trash", "path", relPath, "err", err)
 			continue
 		}
-		s.mu.Lock()
-		s.stateRemove(relPath)
-		s.mu.Unlock()
+		moved = append(moved, relPath)
 	}
 
-	s.mu.RLock()
+	if len(moved) == 0 {
+		return s.Len(), moved, nil
+	}
+
+	removed := make(map[string]struct{}, len(moved))
+	for _, relPath := range moved {
+		removed[relPath] = struct{}{}
+	}
+	s.mu.Lock()
+	files := make([]string, 0, len(s.files)-len(removed))
+	filesLower := make([]string, 0, len(s.filesLower)-len(removed))
+	for i, relPath := range s.files {
+		if _, ok := removed[relPath]; ok {
+			delete(s.types, relPath)
+			s.trashedCount++
+			continue
+		}
+		files = append(files, relPath)
+		filesLower = append(filesLower, s.filesLower[i])
+	}
+	s.files = files
+	s.filesLower = filesLower
+	s.rebuildIndexLocked()
 	count := len(s.files)
-	s.mu.RUnlock()
-	return count, nil
+	s.mu.Unlock()
+	return count, moved, nil
 }
 
 // trashFile performs the physical move of relPath into .trash/.
@@ -409,14 +439,21 @@ func (s *State) ListTrash() ([]string, error) {
 		return nil, err
 	}
 	var items []string
-	_ = filepath.WalkDir(trashRoot, func(path string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			if rel, err := filepath.Rel(trashRoot, path); err == nil {
-				items = append(items, filepath.ToSlash(rel))
+	if err := filepath.WalkDir(trashRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			rel, err := filepath.Rel(trashRoot, path)
+			if err != nil {
+				return err
 			}
+			items = append(items, filepath.ToSlash(rel))
 		}
 		return nil
-	})
+	}); err != nil {
+		return nil, err
+	}
 	sort.Strings(items)
 	return items, nil
 }
@@ -424,32 +461,43 @@ func (s *State) ListTrash() ([]string, error) {
 // RestoreFromTrash moves the given relative paths back from .trash/ to the root,
 // adds them to the active file list, and returns the paths that were successfully restored.
 func (s *State) RestoreFromTrash(relPaths []string) ([]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	root := s.root
+	s.mu.RUnlock()
+
 	restored := make([]string, 0, len(relPaths))
-	trashRoot := filepath.Join(s.root, domain.DirTrash)
+	trashRoot := filepath.Join(root, domain.DirTrash)
 	for _, rel := range relPaths {
-		rel = filepath.ToSlash(filepath.Clean(rel))
-		if rel == "." || rel == "" || strings.HasPrefix(rel, "../") {
+		rel, ok := normalizeTrashRelPath(rel)
+		if !ok {
 			continue
 		}
 		src := filepath.Join(trashRoot, filepath.FromSlash(rel))
-		dst := filepath.Join(s.root, filepath.FromSlash(rel))
+		dst := filepath.Join(root, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
 			slog.Warn("RestoreFromTrash: could not create destination directory", "path", filepath.Dir(dst), "err", err)
+			continue
 		}
 		if _, err := os.Stat(dst); err == nil {
 			dst = resolveCollision(dst)
 		}
 		if err := moveFile(src, dst); err == nil {
-			relDst, _ := filepath.Rel(s.root, dst)
+			relDst, _ := filepath.Rel(root, dst)
 			relDst = filepath.ToSlash(relDst)
 			restored = append(restored, relDst)
 		}
 	}
+
+	// Filesystem work above is deliberately outside the state lock. Recheck
+	// membership while committing each successful move so concurrent refresh or
+	// navigation cannot introduce duplicate active entries.
+	s.mu.Lock()
 	for _, rel := range restored {
-		s.stateInsert(rel, len(s.files))
+		if s.findIndexLocked(rel) < 0 {
+			s.stateInsert(rel, len(s.files))
+		}
 	}
+	s.mu.Unlock()
 	return restored, nil
 }
 
@@ -457,17 +505,17 @@ func (s *State) RestoreFromTrash(relPaths []string) ([]string, error) {
 // inserting it at insertAt in the active file list. Used by the undo system to preserve
 // the original sort position of the restored photo.
 func (s *State) RestoreFromTrashAt(relPath string, insertAt int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	relPath = filepath.ToSlash(filepath.Clean(relPath))
-	if relPath == "." || relPath == "" || strings.HasPrefix(relPath, "../") {
+	relPath, ok := normalizeTrashRelPath(relPath)
+	if !ok {
 		return domain.ErrInvalidPath
 	}
 
-	trashRoot := filepath.Join(s.root, domain.DirTrash)
+	s.mu.RLock()
+	root := s.root
+	s.mu.RUnlock()
+	trashRoot := filepath.Join(root, domain.DirTrash)
 	src := filepath.Join(trashRoot, filepath.FromSlash(relPath))
-	dst := filepath.Join(s.root, filepath.FromSlash(relPath))
+	dst := filepath.Join(root, filepath.FromSlash(relPath))
 
 	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
 		slog.Warn("RestoreFromTrashAt: could not create destination directory", "path", filepath.Dir(dst), "err", err)
@@ -479,10 +527,23 @@ func (s *State) RestoreFromTrashAt(relPath string, insertAt int) error {
 		return err
 	}
 
-	relDst, _ := filepath.Rel(s.root, dst)
+	relDst, _ := filepath.Rel(root, dst)
 	relDst = filepath.ToSlash(relDst)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.findIndexLocked(relDst) >= 0 {
+		return nil
+	}
 	s.stateInsert(relDst, insertAt)
 	return nil
+}
+
+func normalizeTrashRelPath(rel string) (string, bool) {
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	if rel == "." || rel == "" || filepath.IsAbs(rel) || strings.HasPrefix(rel, "../") {
+		return "", false
+	}
+	return rel, true
 }
 
 // TrashedCount returns the number of files that have been trashed in this session.

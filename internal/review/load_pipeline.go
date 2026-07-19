@@ -20,7 +20,34 @@ var (
 	startupSnapshotOverride sync.Map // map[*Server]bool
 )
 
+type loadSummary struct {
+	Result           string
+	Duration         time.Duration
+	Discovered       int
+	SnapshotHit      bool
+	SnapshotMiss     string
+	Reconciled       int
+	MetadataRestored int
+	UndoRestored     int
+	SyncEmitted      bool
+}
+
+func logLoadSummary(v loadSummary) {
+	utils.LogCore("LoadState: lifecycle summary",
+		"result", v.Result,
+		"duration_ms", v.Duration.Milliseconds(),
+		"discovered", v.Discovered,
+		"snapshot_hit", v.SnapshotHit,
+		"snapshot_fallback_reason", v.SnapshotMiss,
+		"reconcile_diff_count", v.Reconciled,
+		"metadata_restored", v.MetadataRestored,
+		"undo_restored", v.UndoRestored,
+		"sync_emitted", v.SyncEmitted,
+	)
+}
+
 func (s *Server) loadStateBootstrap(root string) (*loadPipeline, error) {
+	startedAt := time.Now()
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("LoadState: failed to resolve absolute path: %w", err)
@@ -42,9 +69,9 @@ func (s *Server) loadStateBootstrap(root string) (*loadPipeline, error) {
 		CacheDir: cacheDir,
 		Photos:   make(map[string]Photo),
 	}
-	
-	s.loadPersistedMetadataLocked(folderID)
-	s.loadPersistedHistoryLocked(folderID)
+
+	metadataRestored := s.loadPersistedMetadataLocked(folderID)
+	undoRestored := s.loadPersistedHistoryLocked(folderID)
 
 	s.appStateMu.Unlock()
 	s.stateMu.Unlock()
@@ -72,49 +99,54 @@ func (s *Server) loadStateBootstrap(root string) (*loadPipeline, error) {
 	s.stateMu.Unlock()
 
 	return &loadPipeline{
-		absRoot:      absRoot,
-		folderID:     folderID,
-		newState:     newState,
-		snapshotUsed: snapshotUsed,
-		snapshotMiss: snapshotMiss,
-		scanned:      make(map[string]struct{}),
+		absRoot:          absRoot,
+		folderID:         folderID,
+		newState:         newState,
+		startedAt:        startedAt,
+		metadataRestored: metadataRestored,
+		undoRestored:     undoRestored,
+		snapshotUsed:     snapshotUsed,
+		snapshotMiss:     snapshotMiss,
+		syncEmitted:      true,
+		scanned:          make(map[string]struct{}),
 	}, nil
 }
 
-func (s *Server) loadPersistedHistoryLocked(folderID string) {
+func (s *Server) loadPersistedHistoryLocked(folderID string) int {
 	if s.persistence == nil {
-		return
+		return 0
 	}
 	historyData, err := s.persistence.LoadHistory(folderID)
 	if err != nil {
 		slog.Debug("LoadState: no persisted history", "folder", folderID, "error", err)
-		return
+		return 0
 	}
 	if len(historyData) == 0 {
-		return
+		return 0
 	}
 
 	var history []bus.Event
 	if err := json.Unmarshal(historyData, &history); err != nil {
 		utils.LogWarn("LoadState: failed to decode history JSON, starting fresh",
 			"folder", folderID, "error", err)
-		return
+		return 0
 	}
 
 	if s.appState != nil {
 		s.appState.History = history
 		s.appState.UndoLen = len(history)
 	}
+	return len(history)
 }
 
-func (s *Server) loadPersistedMetadataLocked(folderID string) {
+func (s *Server) loadPersistedMetadataLocked(folderID string) int {
 	if s.persistence == nil {
-		return
+		return 0
 	}
 	meta, err := s.persistence.LoadFolderMetadata(folderID)
 	if err != nil {
 		slog.Debug("LoadState: no persisted folder metadata", "folder", folderID, "error", err)
-		return
+		return 0
 	}
 	for id, m := range meta {
 		s.appState.Photos[id] = Photo{
@@ -125,6 +157,7 @@ func (s *Server) loadPersistedMetadataLocked(folderID string) {
 			IsTrashed: m.IsTrashed,
 		}
 	}
+	return len(meta)
 }
 
 func (s *Server) loadStateIngest(p *loadPipeline) (int, error) {
@@ -208,6 +241,8 @@ func (s *Server) loadStateFinalize(p *loadPipeline, finalCount int) error {
 	s.appState.VisibleOrder = p.newState.files
 	s.appState.TrashedCount = p.newState.trashedCount
 	s.appState.RecalculateCounts()
+	s.appState.photos = newPhotoStore(s.appState.Photos)
+	s.appState.Photos = nil
 	s.appStateMu.Unlock()
 
 	s.progressMu.Lock()
@@ -232,6 +267,7 @@ func (s *Server) loadStateFinalize(p *loadPipeline, finalCount int) error {
 	if p.reconcileDif > 0 || !p.snapshotUsed {
 		utils.LogCore("LoadState: Changes detected, refreshing UI state", "diff", p.reconcileDif)
 		s.SyncFullState()
+		p.syncEmitted = true
 	} else {
 		utils.LogCore("LoadState: No changes detected, skipping redundant UI sync")
 	}
@@ -241,6 +277,17 @@ func (s *Server) loadStateFinalize(p *loadPipeline, finalCount int) error {
 	s.stateMu.Unlock()
 
 	s.saveFolderSnapshot(p)
+	logLoadSummary(loadSummary{
+		Result:           "completed",
+		Duration:         time.Since(p.startedAt),
+		Discovered:       finalCount,
+		SnapshotHit:      p.snapshotUsed,
+		SnapshotMiss:     p.snapshotMiss,
+		Reconciled:       p.reconcileDif,
+		MetadataRestored: p.metadataRestored,
+		UndoRestored:     p.undoRestored,
+		SyncEmitted:      p.syncEmitted,
+	})
 
 	return nil
 }
@@ -319,11 +366,15 @@ func (s *Server) saveFolderSnapshot(p *loadPipeline) {
 }
 
 type loadPipeline struct {
-	absRoot      string
-	folderID     string
-	newState     *State
-	scanned      map[string]struct{}
-	snapshotUsed bool
-	snapshotMiss string
-	reconcileDif int
+	absRoot          string
+	folderID         string
+	newState         *State
+	scanned          map[string]struct{}
+	startedAt        time.Time
+	metadataRestored int
+	undoRestored     int
+	syncEmitted      bool
+	snapshotUsed     bool
+	snapshotMiss     string
+	reconcileDif     int
 }

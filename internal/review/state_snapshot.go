@@ -12,7 +12,7 @@ type AppStateDTO struct {
 	StarredCount int
 	LabeledCount int
 	RotatedCount int
-	UndoLen      int              `json:"undoLen"`
+	UndoLen      int `json:"undoLen"`
 }
 
 // BuildSyncSnapshot creates an immutable AppStateDTO payload for SyncState emission.
@@ -35,11 +35,8 @@ func BuildSyncSnapshot(state AppState, includePhotos bool) AppStateDTO {
 		copy(dto.VisibleOrder, state.VisibleOrder)
 	}
 
-	if includePhotos && state.Photos != nil {
-		dto.Photos = make(map[string]Photo, len(state.Photos))
-		for k, v := range state.Photos {
-			dto.Photos[k] = v
-		}
+	if includePhotos && state.photoCount() > 0 {
+		dto.Photos = state.materializePhotos()
 	}
 	return dto
 }
@@ -62,10 +59,10 @@ func BuildSyncSnapshotSelective(state AppState, isPartial bool, affectedPhotos [
 		copy(dto.VisibleOrder, state.VisibleOrder)
 	}
 
-	if len(affectedPhotos) > 0 && state.Photos != nil {
+	if len(affectedPhotos) > 0 {
 		dto.Photos = make(map[string]Photo, len(affectedPhotos))
 		for _, path := range affectedPhotos {
-			if p, ok := state.Photos[path]; ok {
+			if p, ok := state.photo(path); ok {
 				dto.Photos[path] = p
 			}
 		}

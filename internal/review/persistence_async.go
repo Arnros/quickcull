@@ -9,7 +9,43 @@ import (
 	"quickcull/internal/utils"
 )
 
-const persistenceDebounce = 75 * time.Millisecond
+const (
+	persistenceDebounce       = 75 * time.Millisecond
+	persistenceSummaryCadence = time.Second
+)
+
+type persistenceSummary struct {
+	Affected int
+	Failures int
+	Duration time.Duration
+}
+
+type persistenceSummaryWindow struct {
+	lastEmit time.Time
+	pending  persistenceSummary
+}
+
+func (w *persistenceSummaryWindow) record(now time.Time, affected, failures int, elapsed time.Duration, force bool) (persistenceSummary, bool) {
+	w.pending.Affected += affected
+	w.pending.Failures += failures
+	w.pending.Duration += elapsed
+	if w.pending.Affected == 0 || (!force && !w.lastEmit.IsZero() && now.Sub(w.lastEmit) < persistenceSummaryCadence) {
+		return persistenceSummary{}, false
+	}
+	summary := w.pending
+	w.pending = persistenceSummary{}
+	w.lastEmit = now
+	return summary, true
+}
+
+func logPersistenceSummary(operation string, affected, failures int, elapsed time.Duration) {
+	utils.LogCore("Persistence: batch summary",
+		"operation", operation,
+		"affected", affected,
+		"failures", failures,
+		"duration_ms", elapsed.Milliseconds(),
+	)
+}
 
 type asyncMetadataWriter struct {
 	store persistence.StateStore
@@ -23,6 +59,8 @@ type asyncMetadataWriter struct {
 	flushCh  chan chan struct{}
 	closeCh  chan struct{}
 	doneCh   chan struct{}
+
+	summaryWindow persistenceSummaryWindow
 }
 
 func newAsyncMetadataWriter(store persistence.StateStore) *asyncMetadataWriter {
@@ -78,7 +116,8 @@ func (w *asyncMetadataWriter) signal() {
 	}
 }
 
-func (w *asyncMetadataWriter) flush() {
+func (w *asyncMetadataWriter) flush(forceSummary bool) {
+	startedAt := time.Now()
 	w.mu.Lock()
 	pendingSingle := w.pendingSingle
 	pendingFull := w.pendingFull
@@ -91,16 +130,22 @@ func (w *asyncMetadataWriter) flush() {
 	var failedSingle = make(map[string]map[string]persistence.PhotoMetadata)
 	var failedFull = make(map[string]map[string]persistence.PhotoMetadata)
 	var failedHistory = make(map[string][]byte)
+	affected := 0
+	failures := 0
 
 	for folderID, metadata := range pendingFull {
+		affected += len(metadata)
 		if err := w.store.SaveFolderMetadata(folderID, metadata); err != nil {
+			failures++
 			slog.Error("persistence_async: failed to save folder metadata", "folder", folderID, "error", err)
 			failedFull[folderID] = metadata
 		}
 	}
 	for folderID, photos := range pendingSingle {
 		for photoID, meta := range photos {
+			affected++
 			if err := w.store.SavePhotoMetadata(folderID, photoID, meta); err != nil {
+				failures++
 				slog.Error("persistence_async: failed to save photo metadata", "folder", folderID, "photo", photoID, "error", err)
 				if _, ok := failedSingle[folderID]; !ok {
 					failedSingle[folderID] = make(map[string]persistence.PhotoMetadata)
@@ -110,13 +155,18 @@ func (w *asyncMetadataWriter) flush() {
 		}
 	}
 	for folderID, history := range pendingHistory {
+		affected++
 		if err := w.store.SaveHistory(folderID, history); err != nil {
+			failures++
 			slog.Error("persistence_async: failed to save history", "folder", folderID, "error", err)
 			failedHistory[folderID] = history
 		}
 	}
 
 	w.requeueFailedWrites(failedSingle, failedFull, failedHistory)
+	if summary, ok := w.summaryWindow.record(time.Now(), affected, failures, time.Since(startedAt), forceSummary); ok {
+		logPersistenceSummary("flush", summary.Affected, summary.Failures, summary.Duration)
+	}
 }
 
 func (w *asyncMetadataWriter) requeueFailedWrites(failedSingle, failedFull map[string]map[string]persistence.PhotoMetadata, failedHistory map[string][]byte) {
@@ -187,14 +237,14 @@ func (w *asyncMetadataWriter) loop() {
 			timer.Reset(persistenceDebounce)
 		case <-timerCh:
 			stopTimer()
-			w.flush()
+			w.flush(false)
 		case ack := <-w.flushCh:
 			stopTimer()
-			w.flush()
+			w.flush(false)
 			close(ack)
 		case <-w.closeCh:
 			stopTimer()
-			w.flush()
+			w.flush(true)
 			close(w.doneCh)
 			return
 		}

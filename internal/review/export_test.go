@@ -140,7 +140,7 @@ func TestMoveExportPreservesMetadataInDestinationFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := srv2.appState.Photos[photoID]
+	got := srv2.appState.materializePhotos()[photoID]
 	if !got.IsStarred {
 		t.Error("expected moved photo to keep star metadata")
 	}
@@ -397,7 +397,7 @@ func TestMoveMetadataSaveFailureKeepsSourceMetadata(t *testing.T) {
 	if store.removeCalls != 0 {
 		t.Fatalf("source metadata removed after destination save failure: %d calls", store.removeCalls)
 	}
-	if p := srv.appState.Photos["a.jpg"]; !p.IsStarred || p.Label != 4 {
+	if p := srv.appState.materializePhotos()["a.jpg"]; !p.IsStarred || p.Label != 4 {
 		t.Fatalf("in-memory source metadata changed: %+v", p)
 	}
 }

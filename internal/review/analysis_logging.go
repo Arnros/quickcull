@@ -5,7 +5,32 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"quickcull/internal/utils"
 )
+
+type analysisLifecycleSummary struct {
+	Result         string
+	Duration       time.Duration
+	Processed      int
+	Total          int
+	IOWorkers      int
+	ComputeWorkers int
+	HashDeferred   bool
+}
+
+func logAnalysisLifecycleSummary(v analysisLifecycleSummary) {
+	utils.LogAnalysis("BackgroundAnalysis: lifecycle summary",
+		"result", v.Result,
+		"duration_ms", v.Duration.Milliseconds(),
+		"processed", v.Processed,
+		"total", v.Total,
+		"io_workers", v.IOWorkers,
+		"compute_workers", v.ComputeWorkers,
+		"hash_deferred", v.HashDeferred,
+	)
+}
 
 type analysisIssueKind string
 

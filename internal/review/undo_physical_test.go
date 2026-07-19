@@ -298,10 +298,10 @@ func TestUndo_MixedBatchStructuralRestores(t *testing.T) {
 	if app.server.getState().FindIndex(photoIDs[2]) >= 0 {
 		t.Fatal("c.jpg should be absent after batch trash")
 	}
-	if !app.server.appState.Photos[photoIDs[0]].IsStarred {
+	if !app.server.appState.materializePhotos()[photoIDs[0]].IsStarred {
 		t.Fatal("a.jpg should be starred")
 	}
-	if app.server.appState.Photos[photoIDs[1]].Label != 3 {
+	if app.server.appState.materializePhotos()[photoIDs[1]].Label != 3 {
 		t.Fatal("b.jpg should have label 3")
 	}
 
@@ -340,11 +340,11 @@ func TestUndo_MixedBatchStructuralRestores(t *testing.T) {
 	}
 
 	// 7. Metadata rolled back: star undone, label undone
-	if app.server.appState.Photos[photoIDs[0]].IsStarred {
+	if app.server.appState.materializePhotos()[photoIDs[0]].IsStarred {
 		t.Errorf("%s: star should be cleared after undo", photoIDs[0])
 	}
-	if app.server.appState.Photos[photoIDs[1]].Label != 0 {
-		t.Errorf("%s: label should be 0 after undo, got %d", photoIDs[1], app.server.appState.Photos[photoIDs[1]].Label)
+	if app.server.appState.materializePhotos()[photoIDs[1]].Label != 0 {
+		t.Errorf("%s: label should be 0 after undo, got %d", photoIDs[1], app.server.appState.materializePhotos()[photoIDs[1]].Label)
 	}
 
 	// 8. Second Undo must return ErrNothingToUndo (only one action in history)

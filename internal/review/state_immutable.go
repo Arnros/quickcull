@@ -53,7 +53,9 @@ type AppState struct {
 	IsPartial bool `json:"is_partial,omitempty"`
 
 	// Fast lookup for O(1) property checks
-	Photos map[string]Photo
+	Photos        map[string]Photo
+	photos        *photoStore
+	pendingPhotos map[string]Photo
 
 	// The current ordered list of photo IDs (relPaths) visible in the grid/filmstrip.
 	// This slice should never be mutated in-place; always reassigned.
@@ -77,13 +79,53 @@ type AppState struct {
 	InitialState *AppState
 }
 
+func (s *AppState) photoStoreSnapshot() *photoStore {
+	if s == nil {
+		return newPhotoStore(nil)
+	}
+	if s.photos != nil {
+		return s.photos
+	}
+	return newPhotoStore(s.Photos)
+}
+
+func (s *AppState) photo(id string) (Photo, bool) {
+	if s == nil {
+		return Photo{}, false
+	}
+	if photo, ok := s.pendingPhotos[id]; ok {
+		return photo, true
+	}
+	return s.photoStoreSnapshot().Get(id)
+}
+
+func (s *AppState) photoCount() int { return s.photoStoreSnapshot().Len() }
+
+func (s *AppState) rangePhotos(fn func(string, Photo) bool) {
+	s.photoStoreSnapshot().Range(fn)
+}
+
+func (s *AppState) materializePhotos() map[string]Photo {
+	return s.photoStoreSnapshot().Materialize()
+}
+
+func (s *AppState) commitPendingPhotos() {
+	if len(s.pendingPhotos) > 0 {
+		s.photos = s.photoStoreSnapshot().WithChanges(s.pendingPhotos)
+	} else {
+		s.photos = s.photoStoreSnapshot()
+	}
+	s.pendingPhotos = nil
+	s.Photos = nil
+}
+
 // RecalculateCounts audits the entire Photos map to update StarredCount, LabeledCount, and RotatedCount.
 func (s *AppState) RecalculateCounts() {
 	s.StarredCount = 0
 	s.LabeledCount = 0
 	s.RotatedCount = 0
 	for _, id := range s.VisibleOrder {
-		photo, ok := s.Photos[id]
+		photo, ok := s.photo(id)
 		if !ok || photo.IsTrashed {
 			continue
 		}
@@ -110,14 +152,12 @@ func (s *AppState) Clone(includePhotos bool) AppState {
 		LabeledCount: s.LabeledCount,
 		RotatedCount: s.RotatedCount,
 		IsPartial:    s.IsPartial,
+		photos:       s.photoStoreSnapshot(),
 	}
 
 	// Clone Photos Map (selective)
-	if includePhotos && s.Photos != nil {
-		next.Photos = make(map[string]Photo, len(s.Photos))
-		for k, v := range s.Photos {
-			next.Photos[k] = v
-		}
+	if includePhotos {
+		next.Photos = s.materializePhotos()
 	}
 
 	// Clone Visible Slice
@@ -141,13 +181,12 @@ func (s *AppState) Clone(includePhotos bool) AppState {
 // It takes the current state and an event, and returns a brand-new state plus the
 // event that was just applied (or undone). It never mutates currentState.
 func Reduce(currentState *AppState, event bus.Event) (*AppState, bus.Event, error) {
-	// 1. Always start from a clean clone to guarantee immutability.
-	// Skip Photos copy for undo events: applyUndo creates its own filtered copy.
-	includePhotos := true
-	if _, isUndo := event.Payload.(bus.CommandUndoPayload); isUndo {
-		includePhotos = false
-	}
-	nextState := currentState.Clone(includePhotos)
+	// Metadata transitions share immutable order/photo storage and record only changed photos.
+	nextState := *currentState
+	nextState.photos = currentState.photoStoreSnapshot()
+	nextState.Photos = nil
+	nextState.pendingPhotos = make(map[string]Photo)
+	nextState.History = append([]bus.Event(nil), currentState.History...)
 
 	// Special Case: Undo removes the last event from history.
 	if _, ok := event.Payload.(bus.CommandUndoPayload); ok {
@@ -156,7 +195,10 @@ func Reduce(currentState *AppState, event bus.Event) (*AppState, bus.Event, erro
 
 	// 2. Initialize the immutable origin point if this is the first transition.
 	if nextState.InitialState == nil {
-		firstState := currentState.Clone(true)
+		firstState := *currentState
+		firstState.photos = currentState.photoStoreSnapshot()
+		firstState.Photos = nil
+		firstState.pendingPhotos = nil
 		firstState.History = nil
 		nextState.InitialState = &firstState
 	}
@@ -181,6 +223,7 @@ func Reduce(currentState *AppState, event bus.Event) (*AppState, bus.Event, erro
 	default:
 		event = applySingleEvent(&nextState, event)
 	}
+	nextState.commitPendingPhotos()
 
 	// 4. Append the event to our local historical journal (useful for Undo later).
 	nextState.History = append(nextState.History, event)
@@ -202,7 +245,7 @@ func applySingleEvent(state *AppState, event bus.Event) bus.Event {
 	case bus.CommandToggleStarPayload:
 		applyToggleStar(state, payload.PhotoID, payload.Starred)
 	case bus.CommandTrashPhotoPayload:
-		if photo, ok := state.Photos[payload.PhotoID]; ok {
+		if photo, ok := state.photo(payload.PhotoID); ok {
 			payload.OldIsTrashed = photo.IsTrashed
 			event.Payload = payload
 		}
@@ -210,7 +253,7 @@ func applySingleEvent(state *AppState, event bus.Event) bus.Event {
 	case bus.CommandLabelPhotoPayload:
 		applyLabelPhoto(state, payload.PhotoID, payload.Label)
 	case bus.CommandRotatePhotoPayload:
-		if photo, ok := state.Photos[payload.PhotoID]; ok {
+		if photo, ok := state.photo(payload.PhotoID); ok {
 			payload.OldRotation = photo.Rotation
 			event.Payload = payload
 		}
@@ -230,53 +273,38 @@ func applyUndo(currentState *AppState, nextState AppState) (*AppState, bus.Event
 	nextState.History = nextState.History[:len(nextState.History)-1]
 	nextState.UndoLen = len(nextState.History)
 
-	// Create one Photos copy for the entire undo operation to avoid
-	// duplicating the allocation in every sub-case. When Clone skipped
-	// photos for undo-fast-path, populate from the current state.
-	if nextState.Photos == nil {
-		nextState.Photos = make(map[string]Photo, len(currentState.Photos))
-		for k, v := range currentState.Photos {
-			nextState.Photos[k] = v
-		}
-	}
-	newPhotos := make(map[string]Photo, len(nextState.Photos))
-	for k, v := range nextState.Photos {
-		newPhotos[k] = v
-	}
-
-	applyUndoEvent(&nextState, newPhotos, undoneEvent)
-
-	nextState.Photos = newPhotos
+	applyUndoEvent(&nextState, undoneEvent)
+	nextState.commitPendingPhotos()
 	return &nextState, undoneEvent, nil
 }
 
 // applyUndoEvent restores the metadata captured by one event. Batch events are
 // traversed in reverse so multiple changes to the same photo unwind correctly.
-func applyUndoEvent(state *AppState, photos map[string]Photo, event bus.Event) {
+func applyUndoEvent(state *AppState, event bus.Event) {
 	switch payload := event.Payload.(type) {
 	case bus.CommandToggleStarPayload:
-		before, after, ok := updatePhoto(photos, payload.PhotoID, func(photo *Photo) {
+		before, after, ok := updateStatePhoto(state, payload.PhotoID, func(photo *Photo) {
 			photo.IsStarred = payload.OldStarred
 		})
 		if ok {
 			adjustUndoCount(&state.StarredCount, before.IsStarred, after.IsStarred)
 		}
 	case bus.CommandTrashPhotoPayload:
-		before, after, ok := updatePhoto(photos, payload.PhotoID, func(photo *Photo) {
+		before, after, ok := updateStatePhoto(state, payload.PhotoID, func(photo *Photo) {
 			photo.IsTrashed = payload.OldIsTrashed
 		})
 		if ok {
 			adjustUndoCount(&state.TrashedCount, before.IsTrashed, after.IsTrashed)
 		}
 	case bus.CommandLabelPhotoPayload:
-		before, after, ok := updatePhoto(photos, payload.PhotoID, func(photo *Photo) {
+		before, after, ok := updateStatePhoto(state, payload.PhotoID, func(photo *Photo) {
 			photo.Label = payload.OldLabel
 		})
 		if ok {
 			adjustUndoCount(&state.LabeledCount, before.Label > noLabel, after.Label > noLabel)
 		}
 	case bus.CommandRotatePhotoPayload:
-		before, after, ok := updatePhoto(photos, payload.PhotoID, func(photo *Photo) {
+		before, after, ok := updateStatePhoto(state, payload.PhotoID, func(photo *Photo) {
 			photo.Rotation = undoRotation(*photo, payload)
 		})
 		if ok {
@@ -284,9 +312,20 @@ func applyUndoEvent(state *AppState, photos map[string]Photo, event bus.Event) {
 		}
 	case bus.CommandBatchPayload:
 		for i := len(payload.Events) - 1; i >= 0; i-- {
-			applyUndoEvent(state, photos, payload.Events[i])
+			applyUndoEvent(state, payload.Events[i])
 		}
 	}
+}
+
+func updateStatePhoto(state *AppState, photoID string, update func(*Photo)) (Photo, Photo, bool) {
+	before, ok := state.photo(photoID)
+	if !ok {
+		return Photo{}, Photo{}, false
+	}
+	after := before
+	update(&after)
+	state.pendingPhotos[photoID] = after
+	return before, after, true
 }
 
 func updatePhoto(photos map[string]Photo, photoID string, update func(*Photo)) (Photo, Photo, bool) {
@@ -330,7 +369,7 @@ func undoRotation(photo Photo, payload bus.CommandRotatePhotoPayload) int {
 
 // applyToggleStar sets the starred state of a photo and keeps StarredCount in sync.
 func applyToggleStar(s *AppState, photoID string, starred bool) {
-	before, after, ok := updatePhoto(s.Photos, photoID, func(photo *Photo) {
+	before, after, ok := updateStatePhoto(s, photoID, func(photo *Photo) {
 		photo.IsStarred = starred
 	})
 	if !ok {
@@ -342,7 +381,7 @@ func applyToggleStar(s *AppState, photoID string, starred bool) {
 
 // applyTrashPhoto flips the trashed state of a single photo and keeps TrashedCount in sync.
 func applyTrashPhoto(s *AppState, photoID string) {
-	before, after, ok := updatePhoto(s.Photos, photoID, func(photo *Photo) {
+	before, after, ok := updateStatePhoto(s, photoID, func(photo *Photo) {
 		photo.IsTrashed = !photo.IsTrashed
 	})
 	if !ok {
@@ -354,7 +393,7 @@ func applyTrashPhoto(s *AppState, photoID string) {
 
 // applyLabelPhoto sets a new label on a photo and keeps LabeledCount in sync.
 func applyLabelPhoto(s *AppState, photoID string, label int) {
-	before, after, ok := updatePhoto(s.Photos, photoID, func(photo *Photo) {
+	before, after, ok := updateStatePhoto(s, photoID, func(photo *Photo) {
 		photo.Label = label
 	})
 	if !ok {
@@ -366,7 +405,7 @@ func applyLabelPhoto(s *AppState, photoID string, label int) {
 
 // applyRotatePhoto adjusts a photo's rotation by rotationStep degrees in the given direction.
 func applyRotatePhoto(s *AppState, photoID, direction string) {
-	before, after, ok := updatePhoto(s.Photos, photoID, func(photo *Photo) {
+	before, after, ok := updateStatePhoto(s, photoID, func(photo *Photo) {
 		switch direction {
 		case rotationLeft:
 			photo.Rotation = (photo.Rotation - rotationStep) % rotationModulus
@@ -399,15 +438,16 @@ func applyResetMetadata(s *AppState, scope string) {
 	clearStars := scope == scopeStars || scope == scopeAll
 	clearLabels := scope == scopeLabels || scope == scopeAll
 
-	for id, photo := range s.Photos {
+	s.rangePhotos(func(id string, photo Photo) bool {
 		if clearStars {
 			photo.IsStarred = false
 		}
 		if clearLabels {
 			photo.Label = noLabel
 		}
-		s.Photos[id] = photo
-	}
+		s.pendingPhotos[id] = photo
+		return true
+	})
 	if clearStars {
 		s.StarredCount = 0
 	}

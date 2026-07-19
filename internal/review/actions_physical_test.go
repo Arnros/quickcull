@@ -90,7 +90,7 @@ func TestPhysicalStarAction(t *testing.T) {
 	}
 
 	// 2. Vérifier l'état en mémoire
-	if !app.server.appState.Photos[photoID].IsStarred {
+	if !app.server.appState.materializePhotos()[photoID].IsStarred {
 		t.Error("Memory state should be starred")
 	}
 
@@ -102,7 +102,7 @@ func TestPhysicalStarAction(t *testing.T) {
 	}
 
 	// 4. VERIFIER LA PERSISTENCE REELLE
-	if !srv2.appState.Photos[photoID].IsStarred {
+	if !srv2.appState.materializePhotos()[photoID].IsStarred {
 		t.Error("CRITICAL: Star state did not survive reload")
 	}
 }
@@ -124,8 +124,8 @@ func TestPhysicalLabelAction(t *testing.T) {
 	srv2.persistence = app.server.persistence
 	mustLoadState(t, srv2, app.server.appState.Root)
 
-	if srv2.appState.Photos[photoID].Label != 3 {
-		t.Errorf("Expected label 3 after reload, got %d", srv2.appState.Photos[photoID].Label)
+	if srv2.appState.materializePhotos()[photoID].Label != 3 {
+		t.Errorf("Expected label 3 after reload, got %d", srv2.appState.materializePhotos()[photoID].Label)
 	}
 }
 
@@ -189,8 +189,8 @@ func TestPhysicalRotationAction(t *testing.T) {
 	srv2.persistence = app.server.persistence
 	mustLoadState(t, srv2, app.server.appState.Root)
 
-	if srv2.appState.Photos[photoID].Rotation != 90 {
-		t.Errorf("Rotation did not survive reload, got %d", srv2.appState.Photos[photoID].Rotation)
+	if srv2.appState.materializePhotos()[photoID].Rotation != 90 {
+		t.Errorf("Rotation did not survive reload, got %d", srv2.appState.materializePhotos()[photoID].Rotation)
 	}
 }
 
@@ -211,7 +211,7 @@ func TestPhysicalApplyRotation(t *testing.T) {
 		Payload: bus.CommandRotatePhotoPayload{PhotoID: photoID, Direction: "right"},
 	})
 
-	if app.server.appState.Photos[photoID].Rotation != 90 {
+	if app.server.appState.materializePhotos()[photoID].Rotation != 90 {
 		t.Fatal("Initial rotation should be 90")
 	}
 
@@ -222,8 +222,8 @@ func TestPhysicalApplyRotation(t *testing.T) {
 	}
 
 	// 3. Verify visual rotation is now RESET to 0
-	if app.server.appState.Photos[photoID].Rotation != 0 {
-		t.Errorf("Visual rotation should be reset to 0 after ApplyRotation, got %d", app.server.appState.Photos[photoID].Rotation)
+	if app.server.appState.materializePhotos()[photoID].Rotation != 0 {
+		t.Errorf("Visual rotation should be reset to 0 after ApplyRotation, got %d", app.server.appState.materializePhotos()[photoID].Rotation)
 	}
 }
 
@@ -272,7 +272,7 @@ func TestPhysicalMetadataReset(t *testing.T) {
 	srv2.persistence = app.server.persistence
 	mustLoadState(t, srv2, app.server.appState.Root)
 
-	if srv2.appState.Photos["a.jpg"].IsStarred || srv2.appState.Photos["b.jpg"].Label != 0 {
+	if srv2.appState.materializePhotos()["a.jpg"].IsStarred || srv2.appState.materializePhotos()["b.jpg"].Label != 0 {
 		t.Error("Metadata reset failed to persist")
 	}
 }

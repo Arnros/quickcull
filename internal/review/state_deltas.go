@@ -37,13 +37,16 @@ func (s *Server) broadcastDelta(appliedEvent bus.Event, nextState AppState) bool
 	switch p := appliedEvent.Payload.(type) {
 	case bus.CommandToggleStarPayload:
 		photoID = p.PhotoID
-		changes[deltaKeyIsStarred] = nextState.Photos[photoID].IsStarred
+		photo, _ := nextState.photo(photoID)
+		changes[deltaKeyIsStarred] = photo.IsStarred
 	case bus.CommandLabelPhotoPayload:
 		photoID = p.PhotoID
-		changes[deltaKeyLabel] = nextState.Photos[photoID].Label
+		photo, _ := nextState.photo(photoID)
+		changes[deltaKeyLabel] = photo.Label
 	case bus.CommandRotatePhotoPayload:
 		photoID = p.PhotoID
-		changes[deltaKeyRotation] = nextState.Photos[photoID].Rotation
+		photo, _ := nextState.photo(photoID)
+		changes[deltaKeyRotation] = photo.Rotation
 	}
 
 	if photoID == "" {
@@ -115,7 +118,7 @@ func (s *Server) persistStateChanges(ev bus.Event, state *AppState) {
 
 // persistSinglePhoto writes metadata for one photo to the store.
 func (s *Server) persistSinglePhoto(folderID, photoID string, state *AppState, writer *asyncMetadataWriter) {
-	p, ok := state.Photos[photoID]
+	p, ok := state.photo(photoID)
 	if !ok {
 		return
 	}
@@ -136,15 +139,16 @@ func (s *Server) persistSinglePhoto(folderID, photoID string, state *AppState, w
 
 // persistFullFolder writes metadata for every photo in the state to the store.
 func (s *Server) persistFullFolder(folderID string, state *AppState, writer *asyncMetadataWriter) {
-	metadata := make(map[string]persistence.PhotoMetadata, len(state.Photos))
-	for id, p := range state.Photos {
+	metadata := make(map[string]persistence.PhotoMetadata, state.photoCount())
+	state.rangePhotos(func(id string, p Photo) bool {
 		metadata[id] = persistence.PhotoMetadata{
 			IsStarred: p.IsStarred,
 			Label:     p.Label,
 			Rotation:  p.Rotation,
 			IsTrashed: p.IsTrashed,
 		}
-	}
+		return true
+	})
 	if writer != nil {
 		writer.enqueueFullFolder(folderID, metadata)
 		return

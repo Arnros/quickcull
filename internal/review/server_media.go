@@ -365,7 +365,7 @@ func (s *Server) transferMovedMetadata(sourcePhotoID, destRoot, absDest string) 
 	}
 
 	sourceRoot := s.appState.Root
-	photo, ok := s.appState.Photos[sourcePhotoID]
+	photo, ok := s.appState.photo(sourcePhotoID)
 	s.appStateMu.RUnlock()
 	if !ok {
 		return

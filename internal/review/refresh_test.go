@@ -318,7 +318,7 @@ func TestRefresh_ScanFailurePreservesAppState(t *testing.T) {
 	if srv.appState == nil {
 		t.Fatal("appState was destroyed")
 	}
-	if p, ok := srv.appState.Photos["a.jpg"]; !ok || p.Label != 5 {
+	if p, ok := srv.appState.materializePhotos()["a.jpg"]; !ok || p.Label != 5 {
 		t.Fatalf("appState corrupted: photo=%+v", p)
 	}
 }
@@ -368,17 +368,18 @@ func TestRefresh_SequentialCallsDoNotCorruptState(t *testing.T) {
 	if srv.appState == nil {
 		t.Fatal("appState was destroyed after refreshes")
 	}
-	photoIDs := make(map[string]bool, len(srv.appState.Photos))
-	for id := range srv.appState.Photos {
+	photoIDs := make(map[string]bool, srv.appState.photoCount())
+	srv.appState.rangePhotos(func(id string, _ Photo) bool {
 		photoIDs[id] = true
-	}
+		return true
+	})
 	for _, id := range srv.appState.VisibleOrder {
 		if !photoIDs[id] {
 			t.Fatalf("VisibleOrder[%s] missing from Photos", id)
 		}
 	}
-	if len(srv.appState.VisibleOrder) != len(srv.appState.Photos) {
-		t.Fatalf("VisibleOrder len %d != Photos len %d", len(srv.appState.VisibleOrder), len(srv.appState.Photos))
+	if len(srv.appState.VisibleOrder) != srv.appState.photoCount() {
+		t.Fatalf("VisibleOrder len %d != Photos len %d", len(srv.appState.VisibleOrder), srv.appState.photoCount())
 	}
 	if !slices.Equal(srv.appState.VisibleOrder, []string{"a.jpg", "c.jpg"}) {
 		t.Fatalf("VisibleOrder = %v", srv.appState.VisibleOrder)

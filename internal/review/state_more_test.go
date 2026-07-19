@@ -65,6 +65,47 @@ func TestStateBounds(t *testing.T) {
 	}
 }
 
+func TestRestoreFromTrashRejectsEscapingPaths(t *testing.T) {
+	s, root := newStateWithFiles(t, []string{"a.jpg"})
+	if _, err := s.Trash(0); err != nil {
+		t.Fatalf("trash: %v", err)
+	}
+
+	restored, err := s.RestoreFromTrash([]string{"../a.jpg", filepath.Join(root, ".trash", "a.jpg")})
+	if err != nil {
+		t.Fatalf("restore invalid paths: %v", err)
+	}
+	if len(restored) != 0 || s.Len() != 0 {
+		t.Fatalf("invalid paths must not restore files: restored=%v len=%d", restored, s.Len())
+	}
+	if err := s.RestoreFromTrashAt(filepath.Join(root, ".trash", "a.jpg"), 0); err != domain.ErrInvalidPath {
+		t.Fatalf("RestoreFromTrashAt absolute path error = %v, want ErrInvalidPath", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, domain.DirTrash, "a.jpg")); err != nil {
+		t.Fatalf("invalid restore must retain trash source: %v", err)
+	}
+}
+
+func TestTrashMultiplePathsDetailedReportsOnlySuccessfulUniqueMoves(t *testing.T) {
+	s, root := newStateWithFiles(t, []string{"a.jpg", "b.jpg", "c.jpg"})
+
+	count, moved, err := s.TrashMultiplePathsDetailed([]string{"a.jpg", "a.jpg", "missing.jpg", "c.jpg"})
+	if err != nil {
+		t.Fatalf("trash batch: %v", err)
+	}
+	if count != 1 || len(moved) != 2 || moved[0] != "a.jpg" || moved[1] != "c.jpg" {
+		t.Fatalf("count=%d moved=%v, want count=1 and [a.jpg c.jpg]", count, moved)
+	}
+	if s.FindIndex("a.jpg") >= 0 || s.FindIndex("c.jpg") >= 0 || s.FindIndex("b.jpg") != 0 {
+		t.Fatalf("unexpected active index after batch: a=%d b=%d c=%d", s.FindIndex("a.jpg"), s.FindIndex("b.jpg"), s.FindIndex("c.jpg"))
+	}
+	for _, rel := range moved {
+		if _, err := os.Stat(filepath.Join(root, domain.DirTrash, rel)); err != nil {
+			t.Fatalf("moved file %s missing from trash: %v", rel, err)
+		}
+	}
+}
+
 func TestStateFoldersUpdateVerifyTrashAndPosition(t *testing.T) {
 	files := []string{
 		"a.jpg",

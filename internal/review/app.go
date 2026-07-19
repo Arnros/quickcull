@@ -169,7 +169,7 @@ func (a *App) GetFile(index int, skipAnalysis bool) (FileResponse, error) {
 	// [v2 Refactoring] Overlay metadata from the immutable state
 	a.server.appStateMu.RLock()
 	if a.server.appState != nil {
-		if p, ok := a.server.appState.Photos[relPath]; ok {
+		if p, ok := a.server.appState.photo(relPath); ok {
 			result.Starred = p.IsStarred
 			result.Label = p.Label
 			result.Rotation = p.Rotation
@@ -296,7 +296,7 @@ func (a *App) Trash(index int, path string, paths []string) (ActionResponse, err
 		slog.Debug("Trashing multiple files", "paths", paths)
 		targetIndex = index
 		// Collect absolute paths and create events
-		var events []bus.Event
+		eventsByPath := make(map[string]bus.Event, len(paths))
 		for _, rel := range paths {
 			idx := state.FindIndex(rel)
 			if idx != -1 {
@@ -304,25 +304,31 @@ func (a *App) Trash(index int, path string, paths []string) (ActionResponse, err
 					removedAbsPaths = append(removedAbsPaths, abs)
 				}
 			}
-			events = append(events, bus.Event{
+			eventsByPath[rel] = bus.Event{
 				Type: bus.TypeCommandTrashPhoto,
 				Payload: bus.CommandTrashPhotoPayload{
 					PhotoID:       rel,
 					OriginalIndex: idx,
 				},
-			})
+			}
 		}
 
 		// Update physical state BEFORE publishing so the EventEngine
 		// sees a consistent state when it calls syncPhysicalState.
-		newTotal, err := state.TrashMultiplePaths(paths)
+		newTotal, moved, err := state.TrashMultiplePathsDetailed(paths)
 		if err != nil {
 			return ActionResponse{}, err
 		}
+		events := make([]bus.Event, 0, len(moved))
+		for _, rel := range moved {
+			events = append(events, eventsByPath[rel])
+		}
 
 		// Apply trash events synchronously
-		if err := a.applyTrashEvents(events); err != nil {
-			return ActionResponse{}, err
+		if len(events) > 0 {
+			if err := a.applyTrashEvents(events); err != nil {
+				return ActionResponse{}, err
+			}
 		}
 		return a.finalizeAction(state, newTotal, targetIndex, removedAbsPaths), nil
 	}
@@ -413,7 +419,7 @@ func (a *App) GetStarredIndices() (FilteredIndicesResponse, error) {
 
 	indices := []int{}
 	for i, id := range a.server.appState.VisibleOrder {
-		photo, ok := a.server.appState.Photos[id]
+		photo, ok := a.server.appState.photo(id)
 		if ok && photo.IsStarred {
 			indices = append(indices, i)
 		}
@@ -432,7 +438,7 @@ func (a *App) GetLabelIndices(label int) (FilteredIndicesResponse, error) {
 
 	indices := []int{}
 	for i, id := range a.server.appState.VisibleOrder {
-		photo, ok := a.server.appState.Photos[id]
+		photo, ok := a.server.appState.photo(id)
 		if !ok {
 			continue
 		}
@@ -638,7 +644,7 @@ func (a *App) ApplyRotation(index int, path string) error {
 		a.server.appStateMu.RLock()
 		defer a.server.appStateMu.RUnlock()
 		if a.server.appState != nil {
-			if p, ok := a.server.appState.Photos[actualPath]; ok {
+			if p, ok := a.server.appState.photo(actualPath); ok {
 				return p.Rotation
 			}
 		}
@@ -1053,7 +1059,7 @@ func (a *App) ExportSelection(criteria string, label int, destDir string, move b
 
 	var paths []string
 	for _, id := range a.server.appState.VisibleOrder {
-		p := a.server.appState.Photos[id]
+		p, _ := a.server.appState.photo(id)
 		match := false
 		switch criteria {
 		case "starred":

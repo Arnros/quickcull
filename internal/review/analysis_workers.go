@@ -18,6 +18,7 @@ func (s *Server) runAnalysisWorkerLoop(ctx context.Context, numIOWorkers int, co
 			for {
 				select {
 				case <-ctx.Done():
+					logAnalysisDecision("context_cancelled")
 					return
 				default:
 					if !s.processNextAnalysisTask(ctx, numIOWorkers, computeSem, processors, hashDeferred, progressMu, processed, lastEmitAt) {
@@ -32,9 +33,11 @@ func (s *Server) runAnalysisWorkerLoop(ctx context.Context, numIOWorkers int, co
 func (s *Server) processNextAnalysisTask(ctx context.Context, numIOWorkers int, computeSem chan struct{}, processors []MediaProcessor, hashDeferred *atomic.Bool, progressMu *sync.Mutex, processed *int, lastEmitAt *time.Time) bool {
 	idx, itemPriority, status := s.nextAnalysisTask()
 	if status == analysisTaskStop {
+		logAnalysisDecision("queue_exhausted")
 		return false
 	}
 	if status == analysisTaskRetry {
+		logAnalysisDecision("urgent_retry")
 		return true
 	}
 	s.recordViewReady(idx, itemPriority)
@@ -75,26 +78,43 @@ func (s *Server) nextAnalysisTask() (int, int, analysisTaskStatus) {
 func (s *Server) processAnalysisPath(ctx context.Context, idx, itemPriority, numIOWorkers int, computeSem chan struct{}, processors []MediaProcessor, hashDeferred *atomic.Bool) {
 	state := s.getState()
 	if state == nil {
+		logAnalysisDecision("missing_state", "index", idx)
 		return
 	}
 	path, err := state.AbsPath(idx)
 	if err != nil {
+		logAnalysisDecision("invalid_path", "index", idx, "error", err)
 		return
 	}
 	currentHashDeferred := s.currentHashDeferPolicy()
-	if currentHashDeferred != hashDeferred.Load() {
+	previousHashDeferred := hashDeferred.Load()
+	if currentHashDeferred != previousHashDeferred {
 		hashDeferred.Store(currentHashDeferred)
 		s.setAnalysisPerf(numIOWorkers, currentHashDeferred)
+		logAnalysisHashPolicyTransition(previousHashDeferred, currentHashDeferred)
 	}
 	context := &ProcessorContext{Cache: s.cache, CacheDir: s.cacheDir, ComputeSem: computeSem, SkipBackgroundHash: currentHashDeferred, IsThumbnailEager: true, SkipHeavyThumbnail: itemPriority < priorityWarmMin}
 	processor := GetProcessorFor(path, processors)
 	if processor == nil {
+		logAnalysisDecision("missing_processor", "index", idx, "path", path)
 		return
 	}
 	if err := processor.Process(ctx, path, context); err != nil && !recordAnalysisIssue(analysisIssueProcessor, path, err) {
 		slog.Debug("processor error", "path", path, "error", err)
 	}
 	s.updateBurstAndDuplicates(idx, path, currentHashDeferred)
+}
+
+func logAnalysisDecision(reason string, args ...any) {
+	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	args = append([]any{"reason", reason}, args...)
+	slog.Debug("BackgroundAnalysis: decision", args...)
+}
+
+func logAnalysisHashPolicyTransition(previous, current bool) {
+	logAnalysisDecision("hash_policy_changed", "previous", previous, "current", current)
 }
 
 func (s *Server) updateBurstAndDuplicates(index int, path string, hashDeferred bool) {
@@ -177,6 +197,10 @@ func (s *Server) checkForLiveDuplicates(idx int) {
 	if idx%checkEvery != 0 {
 		return
 	}
+	if !s.duplicateCheckRunning.CompareAndSwap(false, true) {
+		return
+	}
+	defer s.duplicateCheckRunning.Store(false)
 
 	groups := s.cache.GetDuplicateGroups(state, dupSimilarityThreshold)
 	if len(groups) == 0 {

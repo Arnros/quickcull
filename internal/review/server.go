@@ -68,6 +68,9 @@ type Server struct {
 
 	duplicateGroupsMu sync.Mutex
 	duplicateGroups   [][]int
+	// duplicateCheckRunning coalesces expensive BK-tree rebuilds triggered by
+	// concurrent analysis workers.
+	duplicateCheckRunning atomic.Bool
 	lastDupEmit       atomic.Int64 // UnixNano, throttles "duplicates:found" broadcasts
 
 	navPromotionTotal  atomic.Uint64

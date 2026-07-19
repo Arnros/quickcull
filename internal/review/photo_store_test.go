@@ -1,6 +1,9 @@
 package review
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestPhotoStoreWithChangesPreservesParent(t *testing.T) {
 	base := newPhotoStore(map[string]Photo{"a": {ID: "a"}, "b": {ID: "b"}})
@@ -22,18 +25,19 @@ func TestPhotoStoreMaterializeReturnsDetachedMap(t *testing.T) {
 	}
 }
 
-func TestPhotoStoreCompactsAtMaximumDepth(t *testing.T) {
-	store := newPhotoStore(map[string]Photo{"a": {ID: "a"}})
-	for rotation := 1; rotation <= photoStoreMaxDepth; rotation++ {
-		store = store.WithChanges(map[string]Photo{"a": {ID: "a", Rotation: rotation}})
+func TestPhotoStoreCopiesOnlyChangedShard(t *testing.T) {
+	base := newPhotoStore(map[string]Photo{"a": {ID: "a"}, "b": {ID: "b"}})
+	next := base.WithChanges(map[string]Photo{"a": {ID: "a", Rotation: 90}})
+	changed := photoStoreShard("a")
+	unchanged := photoStoreShard("b")
+	if changed == unchanged {
+		t.Fatal("test identifiers must be in distinct shards")
 	}
-
-	if store.depth != 0 {
-		t.Fatalf("depth after compaction = %d, want 0", store.depth)
+	if reflect.ValueOf(base.shards[changed]).Pointer() == reflect.ValueOf(next.shards[changed]).Pointer() {
+		t.Fatal("changed shard was shared")
 	}
-	got, ok := store.Get("a")
-	if !ok || got.Rotation != photoStoreMaxDepth {
-		t.Fatalf("newest value not retained: got=%+v ok=%v", got, ok)
+	if reflect.ValueOf(base.shards[unchanged]).Pointer() != reflect.ValueOf(next.shards[unchanged]).Pointer() {
+		t.Fatal("unchanged shard was copied")
 	}
 }
 

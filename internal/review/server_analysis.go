@@ -28,14 +28,15 @@ func (s *Server) runBackgroundAnalysis(ctx context.Context) {
 	if state == nil {
 		return
 	}
+	startedAt := time.Now()
 
 	numCompute, numIOWorkers := s.computePolicy()
 	computeSem := make(chan struct{}, numCompute)
-	
+
 	var hashDeferred atomic.Bool
 	hashDeferred.Store(s.currentHashDeferPolicy())
 	s.setAnalysisPerf(numIOWorkers, hashDeferred.Load())
-	
+
 	issueCollector := newAnalysisIssueCollector(2)
 	stopIssueCollection := setActiveAnalysisIssueCollector(issueCollector)
 	defer stopIssueCollection()
@@ -59,7 +60,24 @@ func (s *Server) runBackgroundAnalysis(ctx context.Context) {
 	s.runAnalysisWorkerLoop(ctx, numIOWorkers, computeSem, processors, &hashDeferred, &progressMu, &processed, &lastEmitAt, &wg)
 
 	wg.Wait()
-	
+
+	result := "completed"
+	if ctx.Err() != nil {
+		result = "cancelled"
+	}
+	s.progressMu.RLock()
+	total := s.progressTotal
+	s.progressMu.RUnlock()
+	logAnalysisLifecycleSummary(analysisLifecycleSummary{
+		Result:         result,
+		Duration:       time.Since(startedAt),
+		Processed:      processed,
+		Total:          total,
+		IOWorkers:      numIOWorkers,
+		ComputeWorkers: numCompute,
+		HashDeferred:   hashDeferred.Load(),
+	})
+
 	// Final Telemetry & Issues
 	s.logAnalysisSummary(processed, issueCollector)
 

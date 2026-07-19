@@ -2,16 +2,46 @@ package review
 
 import (
 	"quickcull/internal/utils"
-	"runtime"
 	"time"
 )
 
+type syncSummary struct {
+	Result            string
+	Duration          time.Duration
+	Photos            int
+	Chunks            int
+	FullMapSuppressed bool
+}
+
+func logSyncSummary(summary syncSummary) {
+	utils.LogCore("SyncFullState: lifecycle summary",
+		"result", summary.Result,
+		"duration_ms", summary.Duration.Milliseconds(),
+		"photos", summary.Photos,
+		"chunks", summary.Chunks,
+		"full_map_suppressed", summary.FullMapSuppressed,
+	)
+}
+
 // SyncFullState broadcasts the state in chunks for large libraries to prevent OOM.
 func (s *Server) SyncFullState() {
+	startedAt := time.Now()
+	result := "completed"
+	photoCount := 0
+	chunks := 0
+	fullMapSuppressed := false
 	defer func() {
 		if r := recover(); r != nil {
+			result = "failed"
 			utils.LogError("SyncFullState panic", "error", r)
 		}
+		logSyncSummary(syncSummary{
+			Result:            result,
+			Duration:          time.Since(startedAt),
+			Photos:            photoCount,
+			Chunks:            chunks,
+			FullMapSuppressed: fullMapSuppressed,
+		})
 	}()
 
 	s.appStateMu.RLock()
@@ -20,8 +50,9 @@ func (s *Server) SyncFullState() {
 		return
 	}
 
-	photoCount := len(s.appState.Photos)
+	photoCount = s.appState.photoCount()
 	isLarge := photoCount > largeLibraryThreshold
+	fullMapSuppressed = isLarge
 
 	// 1. Initial authoritative sync (structural start)
 	utils.LogCore("SyncFullState: starting delivery", "total", photoCount, "isLarge", isLarge)
@@ -37,28 +68,30 @@ func (s *Server) SyncFullState() {
 	s.appStateMu.RUnlock()
 
 	// 3. Stream photo metadata in chunks
-	s.streamPhotoChunks(keys)
+	chunks = s.streamPhotoChunks(keys)
 
 	// 4. Final authoritative update
 	s.finalizeSync(isLarge)
 
-	// 5. Cleanup
-	runtime.GC()
-	utils.LogCore("SyncFullState: delivery complete and memory flushed")
+	// Memory pressure is handled by the threshold-based watchdog. Forcing a
+	// collection after every sync creates avoidable pauses during navigation.
+	utils.LogCore("SyncFullState: delivery complete")
 }
 
 // snapshotPhotoKeys captures a stable list of photo IDs for chunked delivery.
 // Must be called with appStateMu held (at least RLock).
 func (s *Server) snapshotPhotoKeys() []string {
-	keys := make([]string, 0, len(s.appState.Photos))
-	for k := range s.appState.Photos {
-		keys = append(keys, k)
-	}
+	keys := make([]string, 0, s.appState.photoCount())
+	s.appState.rangePhotos(func(id string, _ Photo) bool {
+		keys = append(keys, id)
+		return true
+	})
 	return keys
 }
 
 // streamPhotoChunks delivers photo metadata in timed batches.
-func (s *Server) streamPhotoChunks(keys []string) {
+func (s *Server) streamPhotoChunks(keys []string) int {
+	chunks := 0
 	for i := 0; i < len(keys); i += syncChunkSize {
 		end := i + syncChunkSize
 		if end > len(keys) {
@@ -70,7 +103,7 @@ func (s *Server) streamPhotoChunks(keys []string) {
 		s.appStateMu.RLock()
 		if s.appState != nil {
 			for _, k := range keys[i:end] {
-				if p, ok := s.appState.Photos[k]; ok {
+				if p, ok := s.appState.photo(k); ok {
 					chunk[k] = p
 				}
 			}
@@ -83,9 +116,11 @@ func (s *Server) streamPhotoChunks(keys []string) {
 			"total":  len(keys),
 			"isLast": end == len(keys),
 		})
+		chunks++
 
 		time.Sleep(syncChunkInterval)
 	}
+	return chunks
 }
 
 // finalizeSync sends the final authoritative state update.
@@ -125,7 +160,11 @@ func (s *Server) RefreshVisibleOrder() {
 		return
 	}
 
-	next := s.appState.Clone(true)
+	// Only the structural fields change here. Keep the immutable photo store and
+	// history shared instead of cloning either collection on every navigation.
+	next := *s.appState
+	next.Photos = nil
+	next.pendingPhotos = nil
 	next.VisibleOrder = visibleOrder
 	next.TrashedCount = trashedCount
 
@@ -153,21 +192,27 @@ func (s *Server) ReconcileScannedFiles(files []string) {
 		return
 	}
 
-	next := s.appState.Clone(false)
+	// Reconciliation replaces the photo store below, so copying the current
+	// visible order or materializing its photos would be wasted work.
+	next := *s.appState
+	next.Photos = nil
+	next.pendingPhotos = nil
 	next.IsPartial = false
 	next.VisibleOrder = append([]string(nil), files...)
-	next.Photos = make(map[string]Photo, len(files))
+	photos := make(map[string]Photo, len(files))
 	for _, id := range files {
-		if photo, ok := s.appState.Photos[id]; ok {
-			next.Photos[id] = photo
+		if photo, ok := s.appState.photo(id); ok {
+			photos[id] = photo
 		} else {
-			next.Photos[id] = Photo{ID: id}
+			photos[id] = Photo{ID: id}
 		}
 	}
+	next.photos = newPhotoStore(photos)
+	next.Photos = nil
 	next.TrashedCount = trashedCount
 	next.RecalculateCounts()
 	s.appState = &next
-	isLarge := len(next.Photos) > largeLibraryThreshold
+	isLarge := next.photoCount() > largeLibraryThreshold
 	s.appStateMu.Unlock()
 
 	if isLarge {

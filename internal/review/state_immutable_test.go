@@ -30,12 +30,12 @@ func TestReduceToggleStar(t *testing.T) {
 	}
 
 	// 3. Verify Immutability: the INITIAL state must NOT have changed.
-	if initialState.Photos["photo1.jpg"].IsStarred != false {
+	if initialState.materializePhotos()["photo1.jpg"].IsStarred != false {
 		t.Errorf("Immutability broken! Initial state was mutated.")
 	}
 
 	// 4. Verify Correctness: the NEW state MUST reflect the change.
-	if nextState.Photos["photo1.jpg"].IsStarred != true {
+	if nextState.materializePhotos()["photo1.jpg"].IsStarred != true {
 		t.Errorf("Reducer failed to toggle star in next state.")
 	}
 
@@ -68,7 +68,7 @@ func TestReduceTrashPhoto(t *testing.T) {
 	}
 
 	// Verify Immutability
-	if initialState.Photos["photo1.jpg"].IsTrashed != false {
+	if initialState.materializePhotos()["photo1.jpg"].IsTrashed != false {
 		t.Errorf("Immutability broken! Initial state was mutated.")
 	}
 	if initialState.TrashedCount != 1 {
@@ -76,7 +76,7 @@ func TestReduceTrashPhoto(t *testing.T) {
 	}
 
 	// Verify Correctness
-	if nextState.Photos["photo1.jpg"].IsTrashed != true {
+	if nextState.materializePhotos()["photo1.jpg"].IsTrashed != true {
 		t.Errorf("Reducer failed to trash photo in next state.")
 	}
 	if nextState.TrashedCount != 2 {
@@ -107,12 +107,12 @@ func TestReduceLabelPhoto(t *testing.T) {
 	}
 
 	// Verify Immutability
-	if initialState.Photos["photo1.jpg"].Label != 0 {
+	if initialState.materializePhotos()["photo1.jpg"].Label != 0 {
 		t.Errorf("Immutability broken! Initial state was mutated.")
 	}
 
 	// Verify Correctness
-	if nextState.Photos["photo1.jpg"].Label != 3 {
+	if nextState.materializePhotos()["photo1.jpg"].Label != 3 {
 		t.Errorf("Reducer failed to label photo in next state.")
 	}
 }
@@ -137,12 +137,12 @@ func TestReduceRotatePhoto(t *testing.T) {
 		t.Fatalf("Reduce returned error: %v", err)
 	}
 
-	if initialState.Photos["photo1.jpg"].Rotation != 90 {
+	if initialState.materializePhotos()["photo1.jpg"].Rotation != 90 {
 		t.Errorf("Immutability broken!")
 	}
 
-	if nextState.Photos["photo1.jpg"].Rotation != 0 {
-		t.Errorf("Expected 0 after rotating left from 90, got %d", nextState.Photos["photo1.jpg"].Rotation)
+	if nextState.materializePhotos()["photo1.jpg"].Rotation != 0 {
+		t.Errorf("Expected 0 after rotating left from 90, got %d", nextState.materializePhotos()["photo1.jpg"].Rotation)
 	}
 
 	eventRight := bus.Event{
@@ -154,8 +154,8 @@ func TestReduceRotatePhoto(t *testing.T) {
 	}
 
 	nextRightState, _, _ := Reduce(nextState, eventRight)
-	if nextRightState.Photos["photo1.jpg"].Rotation != 90 {
-		t.Errorf("Expected 90 after rotating right from 0, got %d", nextRightState.Photos["photo1.jpg"].Rotation)
+	if nextRightState.materializePhotos()["photo1.jpg"].Rotation != 90 {
+		t.Errorf("Expected 90 after rotating right from 0, got %d", nextRightState.materializePhotos()["photo1.jpg"].Rotation)
 	}
 }
 
@@ -175,8 +175,8 @@ func TestReduceRotateReset(t *testing.T) {
 	}
 
 	nextState, _, _ := Reduce(&initialState, event)
-	if nextState.Photos["photo1.jpg"].Rotation != 0 {
-		t.Errorf("Expected 0 after reset, got %d", nextState.Photos["photo1.jpg"].Rotation)
+	if nextState.materializePhotos()["photo1.jpg"].Rotation != 0 {
+		t.Errorf("Expected 0 after reset, got %d", nextState.materializePhotos()["photo1.jpg"].Rotation)
 	}
 }
 
@@ -205,11 +205,12 @@ func TestReduceResetMetadataStarsOnly(t *testing.T) {
 	}
 
 	// Verify all photos have IsStarred=false
-	for id, photo := range nextState.Photos {
+	nextState.rangePhotos(func(id string, photo Photo) bool {
 		if photo.IsStarred {
 			t.Errorf("Expected photo %s to be unstarred after reset stars", id)
 		}
-	}
+		return true
+	})
 
 	// Verify StarredCount=0
 	if nextState.StarredCount != 0 {
@@ -217,8 +218,8 @@ func TestReduceResetMetadataStarsOnly(t *testing.T) {
 	}
 
 	// Verify labels are unchanged
-	if nextState.Photos["photo3.jpg"].Label != 3 {
-		t.Errorf("Expected label of photo3.jpg to remain 3, got %d", nextState.Photos["photo3.jpg"].Label)
+	if nextState.materializePhotos()["photo3.jpg"].Label != 3 {
+		t.Errorf("Expected label of photo3.jpg to remain 3, got %d", nextState.materializePhotos()["photo3.jpg"].Label)
 	}
 	if nextState.LabeledCount != 1 {
 		t.Errorf("Expected LabeledCount=1 (unchanged), got %d", nextState.LabeledCount)
@@ -250,11 +251,12 @@ func TestReduceResetMetadataLabelsOnly(t *testing.T) {
 	}
 
 	// Verify all labels are 0
-	for id, photo := range nextState.Photos {
+	nextState.rangePhotos(func(id string, photo Photo) bool {
 		if photo.Label != 0 {
 			t.Errorf("Expected label of photo %s to be 0 after reset labels, got %d", id, photo.Label)
 		}
-	}
+		return true
+	})
 
 	// Verify LabeledCount=0
 	if nextState.LabeledCount != 0 {
@@ -262,7 +264,7 @@ func TestReduceResetMetadataLabelsOnly(t *testing.T) {
 	}
 
 	// Verify stars are unchanged
-	if !nextState.Photos["photo3.jpg"].IsStarred {
+	if !nextState.materializePhotos()["photo3.jpg"].IsStarred {
 		t.Errorf("Expected photo3.jpg to remain starred")
 	}
 	if nextState.StarredCount != 1 {
@@ -295,14 +297,15 @@ func TestReduceResetMetadataAll(t *testing.T) {
 	}
 
 	// Verify all photos have IsStarred=false and Label=0
-	for id, photo := range nextState.Photos {
+	nextState.rangePhotos(func(id string, photo Photo) bool {
 		if photo.IsStarred {
 			t.Errorf("Expected photo %s to be unstarred after reset all", id)
 		}
 		if photo.Label != 0 {
 			t.Errorf("Expected label of photo %s to be 0 after reset all, got %d", id, photo.Label)
 		}
-	}
+		return true
+	})
 
 	// Verify StarredCount=0 and LabeledCount=0
 	if nextState.StarredCount != 0 {
@@ -373,7 +376,7 @@ func TestReduceUndo(t *testing.T) {
 		t.Fatalf("Reduce returned error: %v", err)
 	}
 
-	if state1.Photos["photo1.jpg"].IsStarred != true {
+	if state1.materializePhotos()["photo1.jpg"].IsStarred != true {
 		t.Errorf("Expected photo to be starred")
 	}
 
@@ -398,7 +401,7 @@ func TestReduceUndo(t *testing.T) {
 		t.Errorf("Expected undoneEvent to be ToggleStar, got %v", undoneEvent.Type)
 	}
 
-	if state2.Photos["photo1.jpg"].IsStarred != false {
+	if state2.materializePhotos()["photo1.jpg"].IsStarred != false {
 		t.Errorf("Expected photo to be UNSTARRED after Undo")
 	}
 

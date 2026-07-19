@@ -734,16 +734,20 @@ class AppState {
         return photo ? [[path, photo] as const] : [];
       }),
     );
+	const indexByPath = new Map<string, number>();
+	for (let index = 0; index < visibleOrder.length; index++) {
+		indexByPath.set(visibleOrder[index], index);
+	}
 
     this.v2 = { ...this.v2, VisibleOrder: visibleOrder, Photos: photos };
     filterState.filteredIndices = filteredPaths
-      .map((path) => visibleOrder.indexOf(path))
+		.map((path) => indexByPath.get(path) ?? -1)
       .filter((index) => index >= 0);
     if (currentPath && removed.has(currentPath)) {
       this.currentFile = null;
       this.currentIndex = Math.min(this.currentIndex, Math.max(visibleOrder.length - 1, 0));
     } else if (currentPath) {
-      const currentIndex = visibleOrder.indexOf(currentPath);
+		const currentIndex = indexByPath.get(currentPath) ?? -1;
       if (currentIndex >= 0) {
         this.currentIndex = currentIndex;
         if (this.currentFile) {

@@ -49,7 +49,7 @@ func (a *App) getPhoto(id string) (Photo, bool) {
 	if a.server.appState == nil {
 		return Photo{}, false
 	}
-	p, ok := a.server.appState.Photos[id]
+	p, ok := a.server.appState.photo(id)
 	return p, ok
 }
 

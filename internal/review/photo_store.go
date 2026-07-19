@@ -1,49 +1,66 @@
 package review
 
-const photoStoreMaxDepth = 32
+const photoStoreShardCount = 256
 
+// photoStore is an immutable, sharded photo map. Updating a photo copies only
+// its shard and the fixed-size shard index, rather than the whole library.
 type photoStore struct {
-	base    map[string]Photo
-	parent  *photoStore
-	changes map[string]Photo
-	length  int
-	depth   int
+	shards [photoStoreShardCount]map[string]Photo
+	length int
 }
 
 func newPhotoStore(photos map[string]Photo) *photoStore {
-	base := make(map[string]Photo, len(photos))
+	store := &photoStore{length: len(photos)}
 	for id, photo := range photos {
-		base[id] = photo
+		shard := photoStoreShard(id)
+		if store.shards[shard] == nil {
+			store.shards[shard] = make(map[string]Photo)
+		}
+		store.shards[shard][id] = photo
 	}
-	return &photoStore{base: base, length: len(base)}
+	return store
+}
+
+func photoStoreShard(id string) uint8 {
+	var hash uint32 = 2166136261
+	for i := 0; i < len(id); i++ {
+		hash ^= uint32(id[i])
+		hash *= 16777619
+	}
+	return uint8(hash)
 }
 
 func (s *photoStore) Get(id string) (Photo, bool) {
-	for layer := s; layer != nil; layer = layer.parent {
-		if photo, ok := layer.changes[id]; ok {
-			return photo, true
-		}
-		if layer.base != nil {
-			photo, ok := layer.base[id]
-			return photo, ok
-		}
+	if s == nil {
+		return Photo{}, false
 	}
-	return Photo{}, false
+	photo, ok := s.shards[photoStoreShard(id)][id]
+	return photo, ok
 }
 
 func (s *photoStore) WithChanges(changes map[string]Photo) *photoStore {
 	if len(changes) == 0 {
 		return s
 	}
-	copyChanges := make(map[string]Photo, len(changes))
+	next := *s
+	copied := [photoStoreShardCount]bool{}
 	for id, photo := range changes {
-		copyChanges[id] = photo
+		shard := photoStoreShard(id)
+		if !copied[shard] {
+			old := next.shards[shard]
+			clone := make(map[string]Photo, len(old)+1)
+			for existingID, existingPhoto := range old {
+				clone[existingID] = existingPhoto
+			}
+			next.shards[shard] = clone
+			copied[shard] = true
+		}
+		if _, exists := next.shards[shard][id]; !exists {
+			next.length++
+		}
+		next.shards[shard][id] = photo
 	}
-	next := &photoStore{parent: s, changes: copyChanges, length: s.Len(), depth: s.depth + 1}
-	if next.depth >= photoStoreMaxDepth {
-		return newPhotoStore(next.Materialize())
-	}
-	return next
+	return &next
 }
 
 func (s *photoStore) Len() int {
@@ -54,26 +71,13 @@ func (s *photoStore) Len() int {
 }
 
 func (s *photoStore) Range(fn func(string, Photo) bool) {
-	seen := make(map[string]struct{}, s.Len())
-	for layer := s; layer != nil; layer = layer.parent {
-		for id, photo := range layer.changes {
-			if _, ok := seen[id]; ok {
-				continue
-			}
-			seen[id] = struct{}{}
+	if s == nil {
+		return
+	}
+	for _, shard := range s.shards {
+		for id, photo := range shard {
 			if !fn(id, photo) {
 				return
-			}
-		}
-		if layer.base != nil {
-			for id, photo := range layer.base {
-				if _, ok := seen[id]; ok {
-					continue
-				}
-				seen[id] = struct{}{}
-				if !fn(id, photo) {
-					return
-				}
 			}
 		}
 	}

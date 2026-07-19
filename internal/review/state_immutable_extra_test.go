@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+func TestReduceMetadataActionSharesVisibleOrderAndPreservesStore(t *testing.T) {
+	state := benchmarkAppState(30000)
+	next, _, err := Reduce(state, bus.Event{Payload: bus.CommandToggleStarPayload{PhotoID: state.VisibleOrder[0], Starred: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if &state.VisibleOrder[0] != &next.VisibleOrder[0] {
+		t.Fatal("metadata action copied VisibleOrder")
+	}
+	before, _ := state.photo(state.VisibleOrder[0])
+	after, _ := next.photo(next.VisibleOrder[0])
+	if before.IsStarred || !after.IsStarred {
+		t.Fatalf("immutable update failed: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestApplyUndoCharacterizationSingleEvents(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -92,8 +108,8 @@ func TestApplyUndoCharacterizationSingleEvents(t *testing.T) {
 			if err != nil {
 				t.Fatalf("undo: %v", err)
 			}
-			if got.Photos["p.jpg"] != tc.wantPhoto {
-				t.Fatalf("photo = %+v, want %+v", got.Photos["p.jpg"], tc.wantPhoto)
+			if got.materializePhotos()["p.jpg"] != tc.wantPhoto {
+				t.Fatalf("photo = %+v, want %+v", got.materializePhotos()["p.jpg"], tc.wantPhoto)
 			}
 			gotCounts := [4]int{got.StarredCount, got.LabeledCount, got.TrashedCount, got.RotatedCount}
 			if gotCounts != tc.wantCounts {
@@ -120,7 +136,7 @@ func TestApplyUndoCharacterizationBatchUsesReverseOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("undo batch: %v", err)
 	}
-	if photo := got.Photos["p.jpg"]; photo.IsStarred || photo.Label != noLabel {
+	if photo := got.materializePhotos()["p.jpg"]; photo.IsStarred || photo.Label != noLabel {
 		t.Fatalf("reverse-order undo did not restore original photo: %+v", photo)
 	}
 	if got.StarredCount != 0 || got.LabeledCount != 0 {
@@ -136,7 +152,7 @@ func TestApplyUndoCharacterizationMissingPhotoIsIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("undo missing photo: %v", err)
 	}
-	if undone.Type != bus.TypeCommandTrashPhoto || got.TrashedCount != 2 || len(got.Photos) != 0 {
+	if undone.Type != bus.TypeCommandTrashPhoto || got.TrashedCount != 2 || got.photoCount() != 0 {
 		t.Fatalf("missing photo undo changed state: undone=%q count=%d photos=%v", undone.Type, got.TrashedCount, got.Photos)
 	}
 }
@@ -158,8 +174,8 @@ func TestReduceUndoLabel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("label: %v", err)
 	}
-	if state1.Photos["p.jpg"].Label != 3 {
-		t.Fatalf("label want 3, got %d", state1.Photos["p.jpg"].Label)
+	if state1.materializePhotos()["p.jpg"].Label != 3 {
+		t.Fatalf("label want 3, got %d", state1.materializePhotos()["p.jpg"].Label)
 	}
 	if state1.LabeledCount != 1 {
 		t.Fatalf("labeled count want 1, got %d", state1.LabeledCount)
@@ -172,8 +188,8 @@ func TestReduceUndoLabel(t *testing.T) {
 	if undone.Type != bus.TypeCommandLabelPhoto {
 		t.Fatalf("undone event type want Label, got %q", undone.Type)
 	}
-	if state2.Photos["p.jpg"].Label != 0 {
-		t.Fatalf("label after undo want 0, got %d", state2.Photos["p.jpg"].Label)
+	if state2.materializePhotos()["p.jpg"].Label != 0 {
+		t.Fatalf("label after undo want 0, got %d", state2.materializePhotos()["p.jpg"].Label)
 	}
 	if state2.LabeledCount != 0 {
 		t.Fatalf("labeled count after undo want 0, got %d", state2.LabeledCount)
@@ -195,7 +211,7 @@ func TestReduceUndoStar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("star: %v", err)
 	}
-	if !state1.Photos["p.jpg"].IsStarred {
+	if !state1.materializePhotos()["p.jpg"].IsStarred {
 		t.Fatal("want starred")
 	}
 	if state1.StarredCount != 1 {
@@ -209,7 +225,7 @@ func TestReduceUndoStar(t *testing.T) {
 	if undone.Type != bus.TypeCommandToggleStar {
 		t.Fatalf("undone event type want Star, got %q", undone.Type)
 	}
-	if state2.Photos["p.jpg"].IsStarred {
+	if state2.materializePhotos()["p.jpg"].IsStarred {
 		t.Fatal("want NOT starred after undo")
 	}
 	if state2.StarredCount != 0 {
@@ -248,7 +264,7 @@ func TestReduceUndoBatch(t *testing.T) {
 	if undone.Type != bus.TypeCommandBatch {
 		t.Fatalf("undone event type want Batch, got %q", undone.Type)
 	}
-	if state2.Photos["a.jpg"].IsStarred || state2.Photos["b.jpg"].Label != 0 {
+	if state2.materializePhotos()["a.jpg"].IsStarred || state2.materializePhotos()["b.jpg"].Label != 0 {
 		t.Fatal("state not restored after batch undo")
 	}
 }
