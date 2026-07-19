@@ -328,17 +328,6 @@ func updateStatePhoto(state *AppState, photoID string, update func(*Photo)) (Pho
 	return before, after, true
 }
 
-func updatePhoto(photos map[string]Photo, photoID string, update func(*Photo)) (Photo, Photo, bool) {
-	before, ok := photos[photoID]
-	if !ok {
-		return Photo{}, Photo{}, false
-	}
-	after := before
-	update(&after)
-	photos[photoID] = after
-	return before, after, true
-}
-
 func adjustUndoCount(count *int, before, after bool) {
 	switch {
 	case !before && after:
