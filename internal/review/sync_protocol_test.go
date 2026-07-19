@@ -108,6 +108,59 @@ func TestSyncLargeLibraryProtocol(t *testing.T) {
 	}
 }
 
+func TestSyncVeryLargeLibraryStreamsBoundedChunksWithoutFullPhotoMap(t *testing.T) {
+	const photoCount = 30_000
+	files := make([]string, photoCount)
+	photos := make(map[string]Photo, photoCount)
+	for i := range files {
+		id := fmt.Sprintf("photo_%05d.jpg", i)
+		files[i] = id
+		photos[id] = Photo{ID: id}
+	}
+
+	srv := NewServer()
+	srv.state = NewState(t.TempDir(), files)
+	srv.appState = &AppState{Root: srv.state.Root(), VisibleOrder: files, photos: newPhotoStore(photos)}
+
+	var mu sync.Mutex
+	chunks := 0
+	photosDelivered := 0
+	structuralUpdates := 0
+	srv.SetBroadcastHook(func(name string, data any) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch name {
+		case eventSyncState:
+			state := data.(AppStateDTO)
+			structuralUpdates++
+			if len(state.Photos) != 0 {
+				t.Errorf("large sync must not send a full photo map; got %d photos", len(state.Photos))
+			}
+		case "sync:state:photos":
+			chunk := data.(map[string]any)["photos"].(map[string]Photo)
+			if len(chunk) > syncChunkSize {
+				t.Errorf("chunk contains %d photos, maximum is %d", len(chunk), syncChunkSize)
+			}
+			chunks++
+			photosDelivered += len(chunk)
+		}
+	})
+
+	srv.SyncFullState()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if chunks != (photoCount+syncChunkSize-1)/syncChunkSize {
+		t.Fatalf("chunks = %d, want %d", chunks, (photoCount+syncChunkSize-1)/syncChunkSize)
+	}
+	if photosDelivered != photoCount {
+		t.Fatalf("photos delivered = %d, want %d", photosDelivered, photoCount)
+	}
+	if structuralUpdates < 2 {
+		t.Fatalf("structural updates = %d, want at least 2", structuralUpdates)
+	}
+}
+
 func TestSyncSmallLibraryProtocol(t *testing.T) {
 	srv := NewServer()
 
